@@ -441,8 +441,11 @@ def read_rakk_battery(
                     battery = d[6]
                     # Only accept sensible values from 0 to 100
                     if 0 <= battery <= 100:
-                        # We don't know the charging flag yet, so say "not charging"
-                        return battery, False
+                        # Byte 7 is the charging flag: 00 = not charging, 01 = charging
+                        # (found by comparing replies with the cable unplugged and plugged in)
+                        charging = d[7] != 0
+                        # Return the battery percentage and whether it is charging
+                        return battery, charging
         # No valid answer in time
         return None, None
     except OSError:
