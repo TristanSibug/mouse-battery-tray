@@ -439,8 +439,9 @@ def read_rakk_battery(
                 if len(d) >= 8 and d[0] == 0x09 and d[1] == 0x04:
                     # Byte 6 is the battery percentage
                     battery = d[6]
-                    # Only accept sensible values from 0 to 100
-                    if 0 <= battery <= 100:
+                    # Only accept 1 to 100. A reading of 0 right after startup means
+                    # "the dongle has no value yet", not "the battery is empty"
+                    if 1 <= battery <= 100:
                         # Byte 7 is the charging flag: 00 = not charging, 01 = charging
                         # (found by comparing replies with the cable unplugged and plugged in)
                         charging = d[7] != 0
