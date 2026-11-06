@@ -1,2 +1,10 @@
-dist/battery_tray.exe
+# Python bytecode (including caches inside protocols/ and tools/)
+__pycache__/
+*.py[cod]
+
+# PyInstaller output; keep battery_tray.spec tracked as the build recipe
+/build/
+/dist/
+
+# Local development environment
 .venv/
