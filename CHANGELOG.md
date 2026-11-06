@@ -4,6 +4,18 @@ All notable changes to the Mouse Battery Tray project are documented in this fil
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Removed
+
+- Removed the **Detect my mouse** tray action, local device-profile storage, and unknown-device setup code. The app uses the built-in protocol handlers automatically; hardware-ID scanning cannot discover a new battery protocol.
+- Removed **Donate / Support** from the tray menu.
+
+### Retained
+
+- Upstream `v1.2.2-dev` protocol updates and the fork's working RAKK Gahum implementation, including serial-less interface matching, startup retries, and invalid 0% filtering.
+- Standalone hardware-ID diagnostic tools, battery alerts, hours estimates, theme detection, startup settings, and update checks.
+
 ## [v1.5.0] - 2026-11-06
 
 ### Added

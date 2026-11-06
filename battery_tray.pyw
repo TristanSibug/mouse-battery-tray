@@ -7,9 +7,7 @@ import webbrowser
 import ctypes
 from typing import Optional, Tuple, List
 
-import hid
 import pystray
-from local_devices import detect_mouse, load_profile, save_profile, resolve_profile, profile_handler
 
 from config import (
     trim_memory,
@@ -46,9 +44,7 @@ class BatteryTrayApp:
         self.status = "disconnected"
         self.charging = False
         self.current_model = "Mouse"
-        self.local_device = load_profile()
-        self.detecting_mouse = False
-        self._rescan_requested = threading.Event()
+        self._stop_requested = threading.Event()
 
         # Alert threshold & state (saved in registry)
         self.alert_threshold: int = get_alert_threshold()
@@ -143,9 +139,6 @@ class BatteryTrayApp:
 
     def open_repo_url(self, icon, item):
         webbrowser.open(GITHUB_REPO_URL)
-
-    def open_kofi_url(self, icon, item):
-        webbrowser.open("https://ko-fi.com/incconutwo")
 
     def on_check_updates_click(self, icon, item):
         self.check_for_updates(manual=True)
@@ -274,55 +267,6 @@ class BatteryTrayApp:
         elif charging:
             self.has_alerted = False
 
-    def on_detect_mouse(self, icon, item):
-        if self.detecting_mouse:
-            return
-        self.detecting_mouse = True
-        self._rescan_requested.set()
-        if self.icon:
-            self.icon.menu = self.create_menu()
-
-    def _detect_mouse(self):
-        # The polling worker owns all HID access, including discovery. A scan
-        # first interrupts its current read loop so handles cannot compete.
-        self._rescan_requested.clear()
-        try:
-            profile, battery, charging = detect_mouse(lambda: not self.running)
-            if profile is None:
-                message = ("No compatible battery response found. Wake your mouse and try again. "
-                           "Its battery protocol may not be supported. Your previous device was kept.")
-            else:
-                save_profile(profile)
-                self.local_device = profile
-                self.current_model = profile["name"]
-                self.battery_history = []
-                self.is_anchored = False
-                self.has_alerted = False
-                self.update_battery_level(battery, charging)
-                message = f"{profile['name']}: {battery}%. Device saved automatically on this PC."
-        except (OSError, ValueError) as exc:
-            message = f"Could not detect or save your mouse: {exc}"
-        finally:
-            self.detecting_mouse = False
-            if self.icon and self.running:
-                self.icon.menu = self.create_menu()
-        if self.icon and self.running:
-            try:
-                self.icon.notify(message, "Detect my mouse")
-            except Exception:
-                pass
-
-    def _poll_local_device(self):
-        if not self.local_device:
-            return False
-        profile = self.local_device
-        path, _ = resolve_profile(profile)
-        if path is None:
-            return False
-        handler = profile_handler(profile)
-        handler.handle_device(self, path, "wireless", profile["name"])
-        return True
-
     def create_menu(self) -> pystray.Menu:
         items = []
         if self.update_status == "available" and self.latest_version:
@@ -365,11 +309,6 @@ class BatteryTrayApp:
             )
         )
         items.append(pystray.MenuItem("Low Battery Alert", threshold_menu))
-        items.append(pystray.MenuItem(
-            "Detecting mouse..." if self.detecting_mouse else "Detect my mouse",
-            self.on_detect_mouse,
-            enabled=not self.detecting_mouse,
-        ))
 
         if self.update_status == "checking":
             items.append(
@@ -384,7 +323,6 @@ class BatteryTrayApp:
         items.append(
             pystray.MenuItem(f"Mouse Battery Tray {__version__}", self.open_repo_url)
         )
-        items.append(pystray.MenuItem("Donate / Support", self.open_kofi_url))
         items.append(pystray.MenuItem("Exit", self.on_exit))
         return pystray.Menu(*items)
 
@@ -431,7 +369,7 @@ class BatteryTrayApp:
             self.update_battery_level(battery, charging)
 
     def polling_active(self):
-        if not self.running or self._rescan_requested.is_set():
+        if not self.running or self._stop_requested.is_set():
             return False
         now = time.time()
         if now - getattr(self, "_last_trim", now) > 60:
@@ -445,16 +383,12 @@ class BatteryTrayApp:
         return True
 
     def wait_for_poll(self, seconds):
-        self._rescan_requested.wait(seconds)
+        self._stop_requested.wait(seconds)
 
     def poll_loop(self):
         self._last_trim = time.time()
         while self.running:
-            if self._rescan_requested.is_set():
-                self._detect_mouse()
             if not self.polling_active():
-                continue
-            if self._poll_local_device():
                 continue
             handled = False
             for handler in get_all_handlers():
@@ -471,7 +405,7 @@ class BatteryTrayApp:
 
     def on_exit(self, icon, item):
         self.running = False
-        self._rescan_requested.set()
+        self._stop_requested.set()
         self.icon.stop()
 
     def toggle_startup(self, icon, item):

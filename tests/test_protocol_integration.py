@@ -1,4 +1,4 @@
-"""Regressions for combining upstream handlers with RAKK and local discovery."""
+"""Regressions for combining upstream handlers with RAKK support."""
 from pathlib import Path
 import sys
 import time
@@ -6,12 +6,12 @@ import unittest
 from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import local_devices as local
+import hid
+from protocols.utils import parse_battery_telemetry
 from protocols import get_all_handlers, rakk
 from protocols.beken import BekenProtocol
 from protocols.compx import CompxProtocol
-import test_local_devices as fixtures
-from test_local_devices import PROFILE, endpoint, enumeration
+from helpers import TestApp, load_tray, endpoint, enumeration
 
 
 def rakk_endpoints():
@@ -35,7 +35,7 @@ class RakkTests(unittest.TestCase):
         self.assertIsInstance(selected[0], rakk.RakkProtocol)
 
     def test_missing_startup_reading_is_retried_until_valid(self):
-        probe = local._BatteryProbe(time.monotonic() + 1, lambda: False)
+        probe = TestApp()
         with patch.object(rakk.hid, 'enumerate', side_effect=enumeration(rakk_endpoints())), \
              patch.object(rakk, 'read_rakk_battery', side_effect=[(None, None), (65, False)]) as read, \
              patch.object(probe, 'wait_for_poll') as wait:
@@ -52,19 +52,6 @@ class RakkTests(unittest.TestCase):
                 device.update(serial_number='', path=f'interface-{number}-{role}'.encode())
             endpoints.extend(pair)
         self.assertEqual(rakk.find_rakk_pairs(endpoints), [])
-
-    def test_one_click_and_saved_profile_work_without_shared_serial(self):
-        endpoints = rakk_endpoints()
-        for index, device in enumerate(endpoints):
-            device.update(serial_number='', path=f'windows-interface-{index}'.encode())
-        sender, listener = Mock(), Mock()
-        listener.read.side_effect = [[], [9, 4, 0, 0, 0, 0, 72, 1]]
-        with patch.object(rakk.hid, 'enumerate', side_effect=enumeration(endpoints)), \
-             patch.object(rakk.hid, 'device', side_effect=[sender, listener]), \
-             patch.object(rakk.time, 'sleep'):
-            profile, battery, charging = local.detect_mouse()
-            self.assertEqual((profile['protocol'], battery, charging), ('rakk', 72, True))
-            self.assertEqual(local.resolve_profile(profile), (endpoints[0]['path'], endpoints[1]['path']))
 
     def test_query_checksum_ignores_zero_startup_reply_and_accepts_charge(self):
         sender, listener = Mock(), Mock()
@@ -122,76 +109,49 @@ class RakkTests(unittest.TestCase):
              patch.object(rakk, 'read_rakk_battery', return_value=(65, False)) as read:
             handler = rakk.RakkProtocol()
             path, mode, name = handler.find_device()
-            probe = local._BatteryProbe(time.monotonic() + 1, lambda: False)
+            probe = TestApp()
             handler.handle_device(probe, path, mode, name)
             self.assertEqual(probe.reading, (65, False))
             read.assert_called_once()
 
 
-class MigrationTests(unittest.TestCase):
-    def test_existing_standard_profiles_use_new_known_handlers(self):
-        for vid, expected in [(0x1D57, BekenProtocol), (0x3554, CompxProtocol)]:
-            profile = {**PROFILE, 'vid': vid}
-            self.assertTrue(local._valid(profile))
-            self.assertIsInstance(local.profile_handler(profile), expected)
-        unknown = local.profile_handler(PROFILE)
-        self.assertFalse(unknown.allow_queries)
-        self.assertTrue(unknown.canonical_only)
-
-    def test_compx_report_six_is_used_for_detection_and_old_profile_polling(self):
+class ProtocolTests(unittest.TestCase):
+    def test_compx_reads_report_six_on_silent_receiver(self):
         device = endpoint(vid=0x3554, pid=0xF58A, page=0xFF04)
         fake = Mock()
         fake.read.return_value = []
         fake.get_feature_report.side_effect = lambda report, size: [6, 0, 0, 0, 85, 0] if report == 6 else []
-        with patch.object(local.hid, 'enumerate', side_effect=enumeration([device])), \
-             patch.object(local.hid, 'device', return_value=fake):
-            profile, battery, charging = local.detect_mouse()
-            self.assertEqual((profile['protocol'], battery, charging), ('compx', 85, False))
-            legacy = {**profile, 'protocol': 'standard'}
-            probe = local._BatteryProbe(time.monotonic() + 1, lambda: False)
-            local.profile_handler(legacy).handle_device(probe, device['path'], 'wireless', profile['name'])
-            self.assertEqual(probe.reading, (85, False))
-        self.assertTrue(fake.close.called)
+        app = TestApp()
+        with patch.object(hid, 'enumerate', side_effect=enumeration([device])), \
+             patch.object(hid, 'device', return_value=fake):
+            CompxProtocol().handle_device(app, device['path'], 'wireless', 'VXE R1 Pro')
+        self.assertEqual(app.reading, (85, False))
+        fake.close.assert_called_once()
 
     def test_gwolves_requires_two_consistent_readings_and_rejects_config(self):
         device = endpoint(vid=0x33E4)
         handler = CompxProtocol()
-        self.assertEqual(handler.parse_packet([3, 0, 0, 0, 48], 0, 0x33E4), (None, None))
+        self.assertEqual(parse_battery_telemetry([3, 0, 0, 0, 48], 0, vid=0x33E4), (None, None))
         for packets, expected in [([[3, 0, 0x40, 0, 48]], (None, None)),
                                   ([[3, 0, 0x40, 0, 48]] * 2, (48, False))]:
             queue = list(packets)
             fake = Mock()
             fake.read.side_effect = lambda size: queue.pop(0) if queue else []
             fake.get_feature_report.return_value = []
-            probe = local._BatteryProbe(time.monotonic() + 0.01, lambda: False)
-            with patch.object(local.hid, 'enumerate', side_effect=enumeration([device])), \
-                 patch.object(local.hid, 'device', return_value=fake), patch.object(probe, 'wait_for_poll'):
+            probe = TestApp(seconds=0.01)
+            with patch.object(hid, 'enumerate', side_effect=enumeration([device])), \
+                 patch.object(hid, 'device', return_value=fake), patch.object(probe, 'wait_for_poll'):
                 handler.handle_device(probe, device['path'], 'wireless', 'G-Wolves')
             self.assertEqual(probe.reading, expected)
-
-    def test_unknown_oem_uses_canonical_passive_reads_only(self):
-        fake = Mock()
-        fake.read.side_effect = [[3, 0, 0, 0, 55], [3, 0, 0x40, 0, 75]]
-        device = endpoint()
-        probe = local._BatteryProbe(time.monotonic() + 1, lambda: False)
-        with patch.object(local.hid, 'enumerate', side_effect=enumeration([device])), \
-             patch.object(local.hid, 'device', return_value=fake):
-            local.profile_handler(PROFILE).handle_device(probe, device['path'], 'wireless', PROFILE['name'])
-        self.assertEqual(probe.reading, (75, False))
-        fake.send_feature_report.assert_not_called()
-        fake.close.assert_called_once()
 
 
 class TrayIntegrationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        # Reuse the platform-isolated tray loader, without collecting its tests twice.
-        fixtures.TrayTests.setUpClass()
-        cls.tray = fixtures.TrayTests.tray
+        cls.tray = load_tray()
 
     def setUp(self):
-        with patch.object(self.tray, 'load_profile', return_value=None):
-            self.app = self.tray.BatteryTrayApp()
+        self.app = self.tray.BatteryTrayApp()
         self.app.icon = Mock()
 
     def test_protocol_bridge_resets_history_and_updates_battery(self):
@@ -212,19 +172,42 @@ class TrayIntegrationTests(unittest.TestCase):
         self.assertEqual(len(self.app.battery_history), 1)
         self.assertLess(self.app.battery_history[0][0], time.time() - 50)
 
-    def test_rescan_interrupts_compx_and_closes_handle(self):
+    def test_exit_interrupts_compx_and_closes_handle(self):
         fake = Mock()
         def read(size):
-            self.app.on_detect_mouse(None, None)
+            self.app.on_exit(None, None)
             return []
         fake.read.side_effect = read
         device = endpoint(vid=0x3554)
-        with patch.object(local.hid, 'enumerate', side_effect=enumeration([device])), \
-             patch.object(local.hid, 'device', return_value=fake):
+        with patch.object(hid, 'enumerate', side_effect=enumeration([device])), \
+             patch.object(hid, 'device', return_value=fake):
             CompxProtocol().handle_device(self.app, device['path'], 'wireless', 'VXE')
         fake.close.assert_called_once()
         fake.send_feature_report.assert_not_called()
-        self.assertTrue(self.app._rescan_requested.is_set())
+        self.assertTrue(self.app._stop_requested.is_set())
+
+    def test_menu_contains_normal_controls_without_discovery_or_donation(self):
+        items = []
+        def menu_item(label, action, **kwargs):
+            items.append(label)
+            return label
+        with patch.object(self.tray.pystray, 'MenuItem', side_effect=menu_item):
+            self.app.create_menu()
+        for label in ('Start with Windows', 'Show Hours Estimate', 'Low Battery Alert', 'Check for Updates', 'Exit'):
+            self.assertIn(label, items)
+        self.assertNotIn('Detect my mouse', items)
+        self.assertNotIn('Donate / Support', items)
+
+    def test_poll_loop_automatically_selects_rakk_without_profile(self):
+        handler = rakk.RakkProtocol()
+        def finish(app, path, mode, name):
+            app.update_device_state(path, name, 72)
+            app.running = False
+        with patch.object(hid, 'enumerate', side_effect=enumeration(rakk_endpoints())), \
+             patch.object(self.tray, 'get_all_handlers', return_value=[handler]), \
+             patch.object(handler, 'handle_device', side_effect=finish):
+            self.app.poll_loop()
+        self.assertEqual((self.app.current_model, self.app.last_battery), ('RAKK Gahum', 72))
 
 
 if __name__ == '__main__':

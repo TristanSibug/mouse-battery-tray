@@ -1,7 +1,8 @@
 # Mouse Battery Tray Indicator
 
-**v1.5.0** adds one-click mouse setup and RAKK Gahum support alongside the
-upstream development branch's modular protocol engines and expanded device support.
+This fork combines the working RAKK Gahum implementation from the fork's main
+branch with the upstream `v1.2.2-dev` modular protocol engines and expanded device
+support. Supported mice are detected automatically when the app starts.
 This is TristanSibug's fork of
 [incconutwo/mouse-battery-tray](https://github.com/incconutwo/mouse-battery-tray).
 See [CHANGELOG.md](CHANGELOG.md) for the release notes.
@@ -56,32 +57,15 @@ verification for other mice.
 
 ## Contributing & Adding New Models
 
-### One-click local setup
+The app automatically discovers connected mice using its implemented Beken,
+CompX, Razer, WLMouse, and RAKK protocols. There is no manual detection menu or
+local device-profile feature. Previously saved `device.json` files are no longer
+read; they can be deleted if desired.
 
-Right-click the tray icon and choose **Detect my mouse**. Keep the mouse awake
-while the app scans. It checks connected HID interfaces, verifies a compatible
-battery reply, saves the first working device, and immediately uses its battery
-reading. No issue submission, Python installation, source editing, or separate
-`dump_devices.exe` is needed when using the compiled app.
-
-The selection is saved in `%LOCALAPPDATA%\MouseBatteryTray\device.json` and loaded
-on future launches. This works with the single-file executable: bundled
-protocol modules stay intact, and the local profile extends detection at runtime.
-Profiles saved by the earlier one-click version are still supported.
-If the selected mouse is unplugged, built-in detection remains available.
-Delete this settings file while the app is closed to clear the selection.
-
-Detection uses the Beken, CompX, Razer, WLMouse, and RAKK protocol handlers,
-including the development branch's active queries, packet validation, and
-multi-interface discovery. It also accepts standard `03 .. 40 .. <battery>`
-reports on compatible OEM mice with unlisted vendor/product IDs.
-Unknown devices receive passive reads only; the
-app cannot infer a new battery protocol from hardware IDs alone. If no valid
-reply arrives, or saving fails, the previous selection is preserved and a
-notification explains the result. Wake the mouse and try again if necessary.
-The app scans only the current connection; changing to wired mode may expose
-a different device. With multiple compatible mice connected, the first one to
-pass the scan is selected; unplug the others to choose a particular mouse.
+Hardware-ID extraction identifies a device and its interfaces. It does not
+capture USB traffic or discover unknown battery commands. Adding an ID may be
+enough for a mouse using an existing protocol; a different protocol needs a
+reader implementation based on documentation or protocol investigation.
 
 ### Sharing hardware IDs
 
@@ -109,7 +93,6 @@ COMPX_DEVICES = {
 
 ## Features
 
-- **Detect my mouse:** One tray-menu action verifies a compatible battery reply, saves a local profile, and immediately starts using the detected mouse. No manual code editing or issue submission is required.
 - **RAKK Gahum polling:** Uses the dedicated battery request, retries missing startup readings, and supports receivers without serial numbers. Invalid initial 0% replies are ignored.
 - **Live Numeric Percentage:** Displays the exact battery level directly on the tray icon as a colored number.
 - **Color-Coded Status:**
@@ -149,7 +132,7 @@ pip install hidapi pystray pillow
 ### Build the Windows executable
 
 1. Install Python 3.12 for Windows, including the Python launcher (`py`).
-2. Download and extract the [v1.5.0 source ZIP](https://github.com/TristanSibug/mouse-battery-tray/archive/refs/tags/v1.5.0.zip).
+2. Download and extract the [current main source ZIP](https://github.com/TristanSibug/mouse-battery-tray/archive/refs/heads/main.zip).
 3. Exit the running tray app. Open **PowerShell** in the extracted folder that
    contains `battery_tray.pyw` and `battery_tray.spec`.
 4. Run these commands one line at a time:
@@ -162,25 +145,26 @@ py -3.12 -m venv .venv
 ```
 
 5. Find the finished **single file** at `dist\battery_tray.exe`. The existing spec
-   bundles the application, protocol modules, local detector, and dependencies
+   bundles the application, protocol modules, and dependencies
    into that executable and hides the console. You do not need to add `--onefile`
    when building from this spec, activate the virtual environment, or change
    PowerShell's execution policy.
 6. Double-click the new executable, check the tray menu displays **v1.5.0**, and
-   test **Detect my mouse**, charging, and restarting. Close it before rebuilding
+   test automatic battery readings, charging, and restarting. Close it before rebuilding
    if Windows reports the file is in use.
 
 Build on **Windows**: running PyInstaller on Linux will not produce a Windows
 `.exe`. The intermediate build goes into the temporary directory, avoiding the
 old tracked `build/` outputs. Existing executables are not updated by source edits.
 
-To distribute it, create a GitHub Release from the **v1.5.0** tag in this fork,
-upload `dist\battery_tray.exe` as a release asset, and publish the release.
-The app's update checker uses this fork's published releases. The user's
-`%LOCALAPPDATA%\MouseBatteryTray\device.json` is created at runtime and should
-not be bundled or uploaded. Recipients need only the executable.
+To distribute it, create a new version tag from the tested commit, create a
+GitHub Release for that tag, upload `dist\battery_tray.exe`, and publish the
+release. Update `__version__` in `updater.py` when preparing the next release.
+The existing `v1.5.0` tag preserves the earlier release, including the retired
+local-setup feature; use current `main` for these changes. The app's update
+checker uses this fork's published releases. Recipients need only the executable.
 
-The discovery and persistence tests can run without Windows or a USB receiver:
+The protocol and tray-control tests can run without Windows or a USB receiver:
 
 ```bash
 python -B -m unittest discover -s tests -v
@@ -193,8 +177,7 @@ by its FF02/2 send and FF01/0 receive interface pair, rather than by IDs alone.
 A single pair can be matched even when Windows exposes different instance
 paths without a serial number. Ambiguous pairs from multiple receivers are
 not guessed. Devices without this interface pair keep their CompX handling.
-Missing or invalid 0% RAKK startup replies are retried in the RAKK handler;
-one-click setup still requires a valid battery reading before saving a profile.
+Missing or invalid 0% RAKK startup replies are retried in the RAKK handler.
 
 ---
 

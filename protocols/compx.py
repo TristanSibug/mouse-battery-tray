@@ -77,18 +77,8 @@ COMPX_DEVICES = {
 }
 
 class CompxProtocol(ProtocolHandler):
-    supported_vids = COMPX_VIDS
-    supported_devices = COMPX_DEVICES
-    canonical_only = False
-    allow_queries = True
-
-    def parse_packet(self, data, device_id, vid):
-        if self.canonical_only and not (len(data) >= 5 and data[0] == 3 and data[2] == 0x40):
-            return None, None
-        return parse_battery_telemetry(data, device_id, is_beken=False, vid=vid)
-
     def find_all_devices(self) -> List[Tuple[str, str, str]]:
-        return find_hid_device_paths(self.supported_vids, self.supported_devices)
+        return find_hid_device_paths(COMPX_VIDS, COMPX_DEVICES)
 
     def find_device(self) -> Tuple[Optional[str], Optional[str], Optional[str]]:
         paths = self.find_all_devices()
@@ -113,7 +103,7 @@ class CompxProtocol(ProtocolHandler):
             if m:
                 path_vid = int(m.group(1), 16)
 
-        candidate_paths = get_candidate_paths_for_device(primary_path, self.supported_vids)
+        candidate_paths = get_candidate_paths_for_device(primary_path, COMPX_VIDS)
 
         open_devices = []
         for p in candidate_paths:
@@ -159,7 +149,7 @@ class CompxProtocol(ProtocolHandler):
                 now = time.time()
 
                 if now - last_recv_time > 5:
-                    current_devices = find_hid_device_paths(self.supported_vids, self.supported_devices)
+                    current_devices = find_hid_device_paths(COMPX_VIDS, COMPX_DEVICES)
                     current_paths = [t[0] for t in current_devices]
                     if primary_path not in current_paths:
                         break
@@ -172,7 +162,7 @@ class CompxProtocol(ProtocolHandler):
                         if data:
                             d_list = list(data)
                             dev_id = d_list[1] if len(d_list) > 1 else None
-                            battery, is_charging = self.parse_packet(d_list, dev_id, path_vid)
+                            battery, is_charging = parse_battery_telemetry(d_list, dev_id, is_beken=False, vid=path_vid)
                             if battery is not None:
                                 # Hysteresis gate: only commit if same reading within window
                                 if path_vid != 0x33e4 or (pending_batt is not None and abs(battery - pending_batt) <= 3 and pending_charging == is_charging and (now - pending_time) < HYSTERESIS_WINDOW):
@@ -188,7 +178,7 @@ class CompxProtocol(ProtocolHandler):
                     except OSError:
                         pass
 
-                if self.allow_queries and polling_active(app) and not got_packet and (app.last_battery < 0 or now - last_recv_time > 3.0) and (now - last_query_time >= 3.0):
+                if polling_active(app) and not got_packet and (app.last_battery < 0 or now - last_recv_time > 3.0) and (now - last_query_time >= 3.0):
                     last_query_time = now
                     for p, dev in open_devices:
                         if got_packet:
@@ -206,7 +196,7 @@ class CompxProtocol(ProtocolHandler):
                                     if resp:
                                         d_list = list(resp)
                                         dev_id = d_list[1] if len(d_list) > 1 else None
-                                        battery, is_charging = self.parse_packet(d_list, dev_id, path_vid)
+                                        battery, is_charging = parse_battery_telemetry(d_list, dev_id, is_beken=False, vid=path_vid)
                                         if battery is not None:
                                             app.update_device_state(primary_path, model_name, battery, charging=is_charging, activity=False)
                                             last_recv_time = now
