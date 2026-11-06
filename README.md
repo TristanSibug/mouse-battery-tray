@@ -1,5 +1,14 @@
 # Mouse Battery Tray Indicator
 
+<img src="https://github.com/user-attachments/assets/4e384838-6073-4457-827c-737c18f909f2" alt="Mouse Battery Tray Screenshot" width="150" align="right">
+
+A lightweight, standalone Windows system tray application that displays the live battery percentage of wireless gaming mice directly in the taskbar.
+
+[<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle; margin-right: 4px;"><path d="M12 15V3"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/></svg> **View releases and downloads**](https://github.com/TristanSibug/mouse-battery-tray/releases/latest)
+
+This tool serves as a lightweight alternative to resource-heavy official manufacturer hub software.
+
+
 This fork combines the working RAKK Gahum implementation from the fork's main
 branch with the upstream `v1.2.2-dev` modular protocol engines and expanded device
 support. Supported mice are detected automatically when the app starts.
@@ -9,17 +18,7 @@ See [CHANGELOG.md](CHANGELOG.md) for the release notes.
 
 [![Platform](https://img.shields.io/badge/Platform-Windows_10_%7C_11-0078D4?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/TristanSibug/mouse-battery-tray)
 [![Release](https://img.shields.io/github/v/release/TristanSibug/mouse-battery-tray?style=for-the-badge&color=28a745)](https://github.com/TristanSibug/mouse-battery-tray/releases)
-[![Downloads](https://img.shields.io/github/downloads/TristanSibug/mouse-battery-tray/total?style=for-the-badge&color=7952b3)](https://github.com/TristanSibug/mouse-battery-tray/releases)
 [![License](https://img.shields.io/badge/License-MIT-blue?style=for-the-badge)](LICENSE)
-[![Ko-fi](https://img.shields.io/badge/Support_on-Ko--fi-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/incconutwo)
-
-<img src="https://github.com/user-attachments/assets/4e384838-6073-4457-827c-737c18f909f2" alt="Mouse Battery Tray Screenshot" width="150" align="right">
-
-A lightweight, standalone Windows system tray application that displays the live battery percentage of wireless gaming mice (Attack Shark, Pulsar, Razer, WLMouse Beast X family, Beken/CompX OEM, etc.) directly in the taskbar.
-
-[<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle; margin-right: 4px;"><path d="M12 15V3"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/></svg> **View releases and downloads**](https://github.com/TristanSibug/mouse-battery-tray/releases/latest)
-
-This tool serves as a lightweight alternative to resource-heavy official manufacturer hub software.
 
 ---
 
@@ -36,7 +35,7 @@ The application officially recognizes the following models, with dynamic fallbac
 | **Pulsar** | Xlite / X2 Series | 🟢 | 🟢 | CompX OEM (`VID 0x25a7`) |
 | | 8K Dongle Gen.2 | 🟢 | 🟡 | 8K Receiver (`VID 0x3710`) |
 | | X2 & X2N CrazyLight | 🟢 | 🟢 | 8K Receiver & Wired (`VID 0x3710`) |
-| **RAKK** | Gahum | 🟢 | 🟡 | Dedicated report-08 query (`VID 0x25a7`, `PID 0xfa7c`); wireless verified by fork maintainer |
+| **Rakk** | Gahum | 🟢 | 🟡 | Dedicated report-08 query (`VID 0x25a7`, `PID 0xfa7c`) |
 | **VXE** | R1 Series (R1 / SE / SE+ / Pro / Pro Max) | 🟢 | 🟡 | Dongles (`VID 0x3554`, `0x320f`) |
 | **Scyrox** | V6 8K | 🟢 | 🟡 | 8K Dongle (`VID 0x3554`) |
 | **Lamzu** | Maya X 8K | 🟢 | 🟡 | 8K Dongle (`VID 0x373e`) |
@@ -49,18 +48,13 @@ The application officially recognizes the following models, with dynamic fallbac
 
 > **Status Key:** 🟢 Supported & Verified &nbsp;|&nbsp; 🟡 Auto-Detected / Untested
 
-The compatibility matrix retains upstream support reports. The maintainer has
-also tested this fork on a RAKK Gahum; simulation tests do not replace hardware
-verification for other mice.
-
 ---
 
 ## Contributing & Adding New Models
 
 The app automatically discovers connected mice using its implemented Beken,
 CompX, Razer, WLMouse, and RAKK protocols. There is no manual detection menu or
-local device-profile feature. Previously saved `device.json` files are no longer
-read; they can be deleted if desired.
+local device-profile feature.
 
 Hardware-ID extraction identifies a device and its interfaces. It does not
 capture USB traffic or discover unknown battery commands. Adding an ID may be
