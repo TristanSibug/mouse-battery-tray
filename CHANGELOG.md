@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **Fix generic device name:** A display-only action for mice already reporting a battery level. It uses a specific USB product name when available and otherwise asks for a model name. Names are saved locally by VID/PID and survive restarts; no protocol mappings are changed.
+- A visible hours-estimate status in the tray menu and an **estimating...** tooltip while discharge history is being collected.
+
+### Fixed
+
+- Hours estimates retain a 48-hour history window and its preceding anchor instead of losing slow discharge observations after four hours. Estimates above 300 hours are no longer silently hidden.
+- Polling gaps reset the estimate even when the percentage is unchanged, charging clears history, and a different HID interface for the same mouse no longer resets learning.
+
 ### Removed
 
 - Removed the **Detect my mouse** tray action, local device-profile storage, and unknown-device setup code. The app uses the built-in protocol handlers automatically; hardware-ID scanning cannot discover a new battery protocol.

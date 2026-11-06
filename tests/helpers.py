@@ -54,7 +54,8 @@ def load_tray():
                         "get_alert_threshold": 20, "set_alert_threshold": True,
                         "get_show_estimate": True, "set_show_estimate": True,
                         "is_light_mode": False, "get_battery_history": ([], False),
-                        "set_battery_history": True}.items():
+                        "set_battery_history": True, "get_device_name": None,
+                        "set_device_name": True}.items():
         setattr(config, name, Mock(return_value=value))
     path = Path(__file__).resolve().parents[1] / "battery_tray.pyw"
     loader = importlib.machinery.SourceFileLoader("tray_under_test", str(path))

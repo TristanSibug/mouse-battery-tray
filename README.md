@@ -50,43 +50,43 @@ The application officially recognizes the following models, with dynamic fallbac
 
 ---
 
-## Contributing & Adding New Models
+## Fix a generic device name
 
-The app automatically discovers connected mice using its implemented Beken,
-CompX, Razer, WLMouse, and RAKK protocols. There is no manual detection menu or
-local device-profile feature.
+**This works only when the app is already detecting your mouse's battery level.**
+It changes the displayed name; it cannot fix missing battery readings, add a
+battery protocol, or reverse-engineer an unsupported mouse.
 
-Hardware-ID extraction identifies a device and its interfaces. It does not
-capture USB traffic or discover unknown battery commands. Adding an ID may be
-enough for a mouse using an existing protocol; a different protocol needs a
-reader implementation based on documentation or protocol investigation.
+If your mouse reports a battery level but has a generic or incorrect name:
 
-### Sharing hardware IDs
+1. Right-click the tray icon and choose **Fix generic device name**.
+2. The app reads that mouse's USB product name. If it is specific, it applies
+   it automatically. If the hardware also reports a generic name, enter your
+   mouse's model name in the dialog.
+3. The name is saved on your PC and used after restarting. You do not need to
+   edit source files, run a separate extractor, or submit an issue.
 
-If your mouse is not fully recognized or is displayed as a generic device, we would love to add official support for it! 
+The action is disabled until a recent battery reading is available. If no
+battery is detected, renaming is not a fix: that mouse may need additional
+protocol support. The app never guesses a model name from hardware IDs alone.
 
-We've made this process incredibly easy by including a standalone **Hardware ID Extractor wizard** (`dump_devices.exe`):
+## Hours estimate
 
-1. Go to the [Releases page](https://github.com/TristanSibug/mouse-battery-tray/releases) and download **`dump_devices.exe`** (or run `python tools/dump_devices.py`).
-2. Run it and follow the simple 2-step prompt to scan your mouse in **Wireless (2.4G)** and **Wired** modes.
-3. The wizard will automatically generate the clean Python dictionary configuration lines for your device.
-4. Copy the generated block and paste it into a GitHub issue or Reddit reply!
+Enable **Show Hours Estimate** in the tray menu. Hover over the tray icon to
+see the estimate next to the battery percentage, or read the **Hours estimate**
+line in the right-click menu.
 
-To contribute built-in support, add the VID/PID mapping to the relevant dictionary
-in `protocols/beken.py`, `protocols/compx.py`, `protocols/wlmouse.py`, or
-`protocols/razer.py`. Protocol logic now lives in `protocols/`; `devices.py` has
-been removed. For example, a CompX mapping belongs in `COMPX_DEVICES`:
-
-```python
-COMPX_DEVICES = {
-    (0xYOUR_VID_HEX, 0xYOUR_PID_HEX): ("Your Mouse Name", "wireless"),
-}
-```
+An estimate needs observed battery discharge; it cannot be calculated from a
+single percentage. Until enough data arrives, the tooltip says **estimating...**
+and the menu shows **learning (needs battery drop)**. Slowly discharging mice
+may need several hours before their first usable battery drop. Charging pauses
+the estimate, and a long gap in polling restarts learning to avoid counting
+sleep time as active discharge. The estimate is approximate and depends on use.
 
 ---
 
 ## Features
 
+- **Fix generic device name:** Automatically use a specific USB product name or enter the model name when needed. Requires existing battery detection and changes only the displayed name.
 - **RAKK Gahum polling:** Uses the dedicated battery request, retries missing startup readings, and supports receivers without serial numbers. Invalid initial 0% replies are ignored.
 - **Live Numeric Percentage:** Displays the exact battery level directly on the tray icon as a colored number.
 - **Color-Coded Status:**

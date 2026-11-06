@@ -8,6 +8,7 @@ import ctypes
 from typing import Optional, Tuple, List
 
 import pystray
+from device_names import device_info, specific_usb_name, identity, ask_device_name
 
 from config import (
     trim_memory,
@@ -20,6 +21,8 @@ from config import (
     set_show_estimate,
     is_light_mode,
     get_battery_history,
+    get_device_name,
+    set_device_name,
     set_battery_history,
 )
 from updater import (
@@ -45,6 +48,10 @@ class BatteryTrayApp:
         self.charging = False
         self.current_model = "Mouse"
         self._stop_requested = threading.Event()
+        self._name_fix_lock = threading.Lock()
+        self._active_device_info = None
+        self._last_battery_read_at = 0
+        self._display_alias = None
 
         # Alert threshold & state (saved in registry)
         self.alert_threshold: int = get_alert_threshold()
@@ -166,7 +173,9 @@ class BatteryTrayApp:
             return None
 
         now = time.time()
-        recent_history = [(t, b) for t, b in self.battery_history if now - t <= 14400]
+        # Retain one anchor before the 48-hour window: slow mice may take
+        # several hours to lose even one percent.
+        recent_history = self._recent_history(now)
         if len(recent_history) < 2:
             return None
 
@@ -187,9 +196,6 @@ class BatteryTrayApp:
         hours = int(remaining_seconds // 3600)
         minutes = int((remaining_seconds % 3600) // 60)
 
-        if hours > 300:
-            return None
-
         if hours >= 1:
             return f"~{hours}h {minutes}m" if minutes > 0 else f"~{hours}h"
         elif minutes > 0:
@@ -197,54 +203,106 @@ class BatteryTrayApp:
         else:
             return "~<1m"
 
+    def _recent_history(self, now):
+        history = [(t, b) for t, b in self.battery_history if t <= now]
+        first_recent = next((i for i, (t, _) in enumerate(history) if now - t <= 172800), len(history))
+        return history[max(0, first_recent - 1):]
+
+    def estimate_status(self):
+        if self.status in ("disconnected", "unknown") or self.last_battery < 0:
+            return "waiting for battery"
+        if self.charging:
+            return "paused while charging"
+        estimate = self.get_battery_estimate_str()
+        if estimate:
+            return estimate
+        return ("learning (needs battery drop)" if len(self.battery_history) < 2
+                else "learning (needs more discharge data)")
+
+    def can_fix_device_name(self):
+        return (self.status in ("connected", "charging") and self.last_battery >= 0
+                and self._active_device_info is not None
+                and time.time() - self._last_battery_read_at <= 180)
+
+    def on_fix_device_name(self, icon, item):
+        if not self.can_fix_device_name():
+            self._name_notice("A detected battery level is required. Renaming cannot fix missing battery support.")
+            return
+        if not self._name_fix_lock.acquire(blocking=False):
+            return
+        info = dict(self._active_device_info)
+        path = self._active_device_path
+        current_name = self.current_model
+        def worker():
+            try:
+                # Read descriptors from this mouse only; do not run battery queries.
+                connected = device_info(path)
+                if connected is None or identity(connected, path) != identity(info, path):
+                    self._name_notice("The mouse disconnected. Try again after its battery reading returns.")
+                    return
+                name = specific_usb_name(connected)
+                if name is None:
+                    name = ask_device_name(current_name)
+                if name is None:
+                    return  # Dialog cancelled.
+                name = ' '.join(name.split())
+                if not 0 < len(name) <= 80:
+                    self._name_notice("Enter a model name between 1 and 80 characters.")
+                    return
+                if not self.can_fix_device_name() or self._active_device_path != path:
+                    self._name_notice("The active mouse changed. Try again when its battery reading returns.")
+                    return
+                if not set_device_name(info['vendor_id'], info['product_id'], name):
+                    self._name_notice("Could not save the device name. Your previous name was kept.")
+                    return
+                self._display_alias = name
+                self.update_tray()
+                self._name_notice(f"Displayed name saved: {name}. Battery support is unchanged.")
+            except Exception as exc:
+                self._name_notice(f"Could not change the displayed name: {exc}")
+            finally:
+                self._name_fix_lock.release()
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _name_notice(self, message):
+        if self.icon and self.running:
+            try:
+                self.icon.notify(message, "Fix generic device name")
+            except Exception:
+                pass
+
     def update_battery_level(self, battery: int, charging: bool = False):
         self.last_battery = battery
         self.charging = charging
         self.status = "charging" if charging else "connected"
 
         now = time.time()
+        first_read = not hasattr(self, '_last_update_call')
         time_since_last_poll = now - getattr(self, "_last_update_call", now)
         self._last_update_call = now
         pc_slept = time_since_last_poll > 1800
 
         if charging:
-            self.battery_history.clear()
+            self.battery_history = []
             self.is_anchored = False
-            set_battery_history([], False)
         elif battery >= 0:
+            # Missing polls invalidate the observed discharge interval, even if
+            # the device reports the same percentage after waking.
+            if pc_slept or (first_read and self.battery_history and now - self.battery_history[-1][0] > 172800):
+                self.battery_history = []
             if not self.battery_history:
                 self.battery_history = [(now, battery)]
-                self.is_anchored = False
-                set_battery_history(self.battery_history, False)
-            else:
-                last_time, last_pct = self.battery_history[-1]
-
-                if pc_slept and battery != last_pct:
-                    # Battery changed while PC was asleep; drop time is unknown.
-                    self.battery_history = [(now, battery)]
-                    self.is_anchored = False
-                    set_battery_history(self.battery_history, False)
-                elif battery < last_pct:
-                    # Battery level dropped!
-                    if not self.is_anchored:
-                        # First drop: anchor the initial timestamp if we monitored it continuously.
-                        # This gives an estimate on the first drop.
-                        self.battery_history.append((now, battery))
-                        self.is_anchored = True
-                    else:
-                        # Subsequent drop. Append to history.
-                        self.battery_history.append((now, battery))
-
-                    # Prune stale entries (>4h) BEFORE saving to registry
-                    self.battery_history = [
-                        (t, b) for t, b in self.battery_history if now - t <= 14400
-                    ]
-                    set_battery_history(self.battery_history, True)
-                elif battery > last_pct + 5:
-                    # Battery increased significantly without charging flag: reset history.
-                    self.battery_history = [(now, battery)]
-                    self.is_anchored = False
-                    set_battery_history(self.battery_history, False)
+            elif battery > self.battery_history[-1][1]:
+                self.battery_history = [(now, battery)]
+            elif battery < self.battery_history[-1][1]:
+                self.battery_history.append((now, battery))
+            self.battery_history = self._recent_history(now)
+            self.is_anchored = len(self.battery_history) >= 2
+        # Save on changes, not on every 100ms HID poll.
+        history_state = (tuple(self.battery_history), self.is_anchored)
+        if history_state != getattr(self, '_saved_history_state', None):
+            set_battery_history(self.battery_history, self.is_anchored)
+            self._saved_history_state = history_state
 
         self.update_tray()
 
@@ -255,7 +313,7 @@ class BatteryTrayApp:
                 self.has_alerted = True
                 if self.icon:
                     try:
-                        model = self.current_model or "Mouse"
+                        model = self._display_alias or self.current_model or "Mouse"
                         self.icon.notify(
                             f"{model} battery level is low ({battery}%). Please connect charger.",
                             "Low Battery Alert",
@@ -308,6 +366,16 @@ class BatteryTrayApp:
                 checked=lambda item: self.show_estimate,
             )
         )
+        if self.show_estimate:
+            items.append(pystray.MenuItem(
+                lambda item: "Hours estimate: " + self.estimate_status(), None, enabled=False,
+            ))
+        items.append(pystray.MenuItem(
+            "Fix generic device name", self.on_fix_device_name,
+            enabled=lambda item: self.can_fix_device_name(),
+        ))
+        if not self.can_fix_device_name():
+            items.append(pystray.MenuItem("Name fix requires a detected battery level", None, enabled=False))
         items.append(pystray.MenuItem("Low Battery Alert", threshold_menu))
 
         if self.update_status == "checking":
@@ -330,10 +398,14 @@ class BatteryTrayApp:
         if not self.icon:
             return
 
+        menu_state = (self.can_fix_device_name(), self.estimate_status())
+        if menu_state != getattr(self, '_last_menu_state', None):
+            self._last_menu_state = menu_state
+            self.icon.menu = self.create_menu()
         self.last_theme = is_light_mode()
         self.icon.icon = get_icon_data(self.status, self.last_battery, self._icon_cache)
 
-        model = self.current_model or "Mouse"
+        model = self._display_alias or self.current_model or "Mouse"
         if self.status == "disconnected":
             self.icon.title = f"{model}: Disconnected"
         elif self.status == "connected" and self.last_battery < 0:
@@ -348,18 +420,29 @@ class BatteryTrayApp:
             est_str = self.get_battery_estimate_str()
             if est_str:
                 self.icon.title = f"{model}: {self.last_battery}% ({est_str})"
+            elif self.show_estimate:
+                self.icon.title = f"{model[:64]}: {self.last_battery}% (estimating...)"
             else:
                 self.icon.title = f"{model}: {self.last_battery}%"
 
     def update_device_state(self, path, model_name, battery, charging=False, activity=False):
         """Bridge protocol updates to the tray, alerts, and discharge history."""
         previous_path = getattr(self, "_active_device_path", None)
-        if previous_path is not None and previous_path != path:
-            self.battery_history = []
-            self.is_anchored = False
-            self.has_alerted = False
-        self._active_device_path = path
+        if previous_path != path or self._active_device_info is None:
+            info = device_info(path)
+            key = identity(info, path)
+            previous_key = getattr(self, '_active_device_key', previous_path)
+            if previous_key is not None and previous_key != key:
+                self.battery_history = []
+                self.is_anchored = False
+                self.has_alerted = False
+            self._active_device_path = path
+            self._active_device_key = key
+            self._active_device_info = info
+            self._display_alias = get_device_name(info['vendor_id'], info['product_id']) if info else None
         self.current_model = model_name
+        if battery >= 0:
+            self._last_battery_read_at = time.time()
         if battery < 0:
             self.last_battery = battery
             self.charging = charging

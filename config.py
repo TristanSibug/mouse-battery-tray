@@ -153,3 +153,25 @@ def set_battery_history(history: list, is_anchored: bool) -> bool:
         print(f"Error saving battery history: {e}")
         return False
 
+
+def get_device_name(vid: int, pid: int):
+    """Local display alias, independent of protocol selection and device paths."""
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, REG_SETTINGS_KEY + r"\DeviceNames", 0, winreg.KEY_READ) as key:
+            name, _ = winreg.QueryValueEx(key, f"{vid:04x}:{pid:04x}")
+            return name if isinstance(name, str) and 0 < len(name.strip()) <= 80 else None
+    except OSError:
+        return None
+
+
+def set_device_name(vid: int, pid: int, name: str) -> bool:
+    name = ' '.join(name.split())
+    if not 0 < len(name) <= 80:
+        return False
+    try:
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, REG_SETTINGS_KEY + r"\DeviceNames") as key:
+            winreg.SetValueEx(key, f"{vid:04x}:{pid:04x}", 0, winreg.REG_SZ, name)
+        return True
+    except OSError:
+        return False
+
