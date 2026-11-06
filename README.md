@@ -39,6 +39,32 @@ The application officially recognizes the following models, with dynamic fallbac
 
 ## Contributing & Adding New Models
 
+### One-click local setup
+
+Right-click the tray icon and choose **Detect my mouse**. Keep the mouse awake
+while the app scans. It checks connected HID interfaces, verifies a compatible
+battery reply, saves the first working device, and immediately uses its battery
+reading. No issue submission, Python installation, source editing, or separate
+`dump_devices.exe` is needed when using the compiled app.
+
+The selection is saved in `%LOCALAPPDATA%\MouseBatteryTray\device.json` and loaded
+on future launches. This works with the single-file executable: bundled
+`devices.py` stays intact, and the local profile extends detection at runtime.
+If the selected mouse is unplugged, built-in detection remains available.
+Delete this settings file while the app is closed to clear the selection.
+
+Detection supports the existing Razer, WLMouse, and RAKK battery queries and
+the standard `03 .. 40 .. <battery>` reports on compatible OEM mice, including
+unlisted vendor/product IDs. Unknown devices receive passive reads only; the
+app cannot infer a new battery protocol from hardware IDs alone. If no valid
+reply arrives, or saving fails, the previous selection is preserved and a
+notification explains the result. Wake the mouse and try again if necessary.
+The app scans only the current connection; changing to wired mode may expose
+a different device. With multiple compatible mice connected, the first one to
+pass the scan is selected; unplug the others to choose a particular mouse.
+
+### Sharing hardware IDs
+
 If your mouse is not fully recognized or is displayed as a generic device, we would love to add official support for it! 
 
 We've made this process incredibly easy by including a standalone **Hardware ID Extractor wizard** (`dump_devices.exe`):
@@ -85,6 +111,27 @@ Make sure you have [Python 3.10+](https://www.python.org/) installed and added t
 Open your terminal (Command Prompt or PowerShell) and run:
 ```bash
 pip install hidapi pystray pillow
+```
+
+### Build the Windows executable
+
+Run these commands from the repository directory on **Windows** after changing
+the source. Existing release executables do not acquire new features automatically.
+PyInstaller follows the `local_devices` import and bundles the detector into the
+same single-file executable; the settings file is created on the user's PC.
+
+```bat
+python -m pip install pyinstaller
+python -m PyInstaller --noconfirm --clean --workpath "%TEMP%\MouseBatteryTray-build" battery_tray.spec
+```
+
+The result is `dist\battery_tray.exe`. Windows tray behavior and live battery
+readings must be checked on Windows with a supported receiver connected.
+
+The discovery and persistence tests can run without Windows or a USB receiver:
+
+```bash
+python -B -m unittest discover -s tests -v
 ```
 
 ---

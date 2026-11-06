@@ -9,6 +9,7 @@ from typing import Optional, Tuple, List
 
 import hid
 import pystray
+from local_devices import detect_mouse, load_profile, save_profile, resolve_profile
 
 from config import (
     trim_memory,
@@ -54,6 +55,9 @@ class BatteryTrayApp:
         self.status = "disconnected"
         self.charging = False
         self.current_model = "Mouse"
+        self.local_device = load_profile()
+        self.detecting_mouse = False
+        self._rescan_requested = threading.Event()
 
         # Alert threshold & state (saved in registry)
         self.alert_threshold: int = get_alert_threshold()
@@ -279,6 +283,69 @@ class BatteryTrayApp:
         elif charging:
             self.has_alerted = False
 
+    def on_detect_mouse(self, icon, item):
+        if self.detecting_mouse:
+            return
+        self.detecting_mouse = True
+        self._rescan_requested.set()
+        if self.icon:
+            self.icon.menu = self.create_menu()
+
+    def _detect_mouse(self):
+        # The polling worker owns all HID access, including discovery. A scan
+        # first interrupts its current read loop so handles cannot compete.
+        self._rescan_requested.clear()
+        try:
+            profile, battery, charging = detect_mouse(lambda: not self.running)
+            if profile is None:
+                message = ("No compatible battery response found. Wake your mouse and try again. "
+                           "Its battery protocol may not be supported. Your previous device was kept.")
+            else:
+                save_profile(profile)
+                self.local_device = profile
+                self.current_model = profile["name"]
+                self.battery_history = []
+                self.is_anchored = False
+                self.has_alerted = False
+                self.update_battery_level(battery, charging)
+                message = f"{profile['name']}: {battery}%. Device saved automatically on this PC."
+        except (OSError, ValueError) as exc:
+            message = f"Could not detect or save your mouse: {exc}"
+        finally:
+            self.detecting_mouse = False
+            if self.icon and self.running:
+                self.icon.menu = self.create_menu()
+        if self.icon and self.running:
+            try:
+                self.icon.notify(message, "Detect my mouse")
+            except Exception:
+                pass
+
+    def _poll_local_device(self):
+        if not self.local_device:
+            return False
+        profile = self.local_device
+        path, listener = resolve_profile(profile)
+        if path is None:
+            return False  # Disconnected selection: keep the built-in fallback.
+        if profile["protocol"] == "standard":
+            self._handle_standard_device(path, "wireless", profile["name"], profile)
+        else:
+            self.current_model = profile["name"]
+            if profile["protocol"] == "wlmouse":
+                battery, charging = read_wlmouse_battery(path)
+            elif profile["protocol"] == "razer":
+                battery, charging = read_razer_battery(path)
+            else:
+                battery, charging = read_rakk_battery(path, listener)
+            if battery is not None:
+                self.update_battery_level(battery, bool(charging))
+            else:
+                self.status = "unknown"
+                self.update_tray()
+            self._rescan_requested.wait(10)
+        return True
+
     def create_menu(self) -> pystray.Menu:
         items = []
         if self.update_status == "available" and self.latest_version:
@@ -321,6 +388,11 @@ class BatteryTrayApp:
             )
         )
         items.append(pystray.MenuItem("Low Battery Alert", threshold_menu))
+        items.append(pystray.MenuItem(
+            "Detecting mouse..." if self.detecting_mouse else "Detect my mouse",
+            self.on_detect_mouse,
+            enabled=not self.detecting_mouse,
+        ))
 
         if self.update_status == "checking":
             items.append(
@@ -367,6 +439,10 @@ class BatteryTrayApp:
     def poll_loop(self):
         last_trim = time.time()
         while self.running:
+            if self._rescan_requested.is_set():
+                self._detect_mouse()
+            if not self.running:
+                break
             if time.time() - last_trim > 60:
                 trim_memory()
                 last_trim = time.time()
@@ -378,7 +454,10 @@ class BatteryTrayApp:
                 self.last_update_check_time = time.time()
                 self.check_for_updates(manual=False)
 
-                # --- RAKK Gahum: ask the dongle for the battery ---
+            if self._poll_local_device():
+                continue
+
+            # --- RAKK Gahum: ask the dongle for the battery ---
             # Look for the two HID paths the RAKK dongle uses
             rakk_send, rakk_listen = find_rakk()
             # If the dongle is plugged in
@@ -391,12 +470,12 @@ class BatteryTrayApp:
                 if battery is not None:
                     self.update_battery_level(battery, bool(charging))
                     # Battery changes slowly, so wait 60 seconds before asking again
-                    time.sleep(60)
+                    self._rescan_requested.wait(60)
                 else:
                     # No answer: show "detected (battery unavailable)" and retry soon
                     self.status = "unknown"
                     self.update_tray()
-                    time.sleep(10)
+                    self._rescan_requested.wait(10)
                 # Go back to the top of the loop (skip the other device checks)
                 continue
 
@@ -414,7 +493,7 @@ class BatteryTrayApp:
                 else:
                     self.status = "unknown"
                     self.update_tray()
-                time.sleep(10)
+                self._rescan_requested.wait(10)
                 continue
 
             razer_path, razer_name, razer_pid = find_razer()
@@ -426,21 +505,21 @@ class BatteryTrayApp:
                 else:
                     self.status = "unknown"
                     self.update_tray()
-                time.sleep(10)
+                self._rescan_requested.wait(10)
                 continue
 
             if self.status != "disconnected":
                 self.status = "disconnected"
                 self.update_tray()
-            time.sleep(5)
+            self._rescan_requested.wait(5)
 
-    def _handle_standard_device(self, path: str, mode: str, model_name: str):
+    def _handle_standard_device(self, path: str, mode: str, model_name: str, local_profile=None):
         self.current_model = model_name
         if mode == "wired":
             if self.status != "charging":
                 self.status = "charging"
                 self.update_tray()
-            time.sleep(5)
+            self._rescan_requested.wait(5)
             return
 
         try:
@@ -454,7 +533,7 @@ class BatteryTrayApp:
 
             last_recv_time = time.time()
             last_trim_time = time.time()
-            while self.running:
+            while self.running and not self._rescan_requested.is_set():
                 if time.time() - last_trim_time > 60:
                     trim_memory()
                     last_trim_time = time.time()
@@ -467,7 +546,11 @@ class BatteryTrayApp:
                     self.check_for_updates(manual=False)
 
                 if time.time() - last_recv_time > 5:
-                    path_check, mode_check, model_check = find_device_path()
+                    if local_profile:
+                        path_check, _ = resolve_profile(local_profile)
+                        mode_check, model_check = "wireless", local_profile["name"]
+                    else:
+                        path_check, mode_check, model_check = find_device_path()
                     if not path_check or mode_check != "wireless" or path_check != path:
                         break
                     self.current_model = model_check
@@ -478,7 +561,7 @@ class BatteryTrayApp:
                     if data:
                         # Parse battery packet: [0x03, device_id, 0x40, sub_type, battery_val, ...]
                         # Broaden data[0] == 0x03 matching to support Incott/PixArt 8K receivers where data[2] != 0x40
-                        if len(data) >= 5 and data[0] == 0x03:
+                        if len(data) >= 5 and data[0] == 0x03 and (not local_profile or data[2] == 0x40):
                             device_id = data[1]
                             is_beken = device_id in BEKEN_DEVICE_NAMES
                             if is_beken:
@@ -522,7 +605,7 @@ class BatteryTrayApp:
         except OSError:
             self.status = "disconnected"
             self.update_tray()
-            time.sleep(5)
+            self._rescan_requested.wait(5)
         finally:
             try:
                 dev.close()
@@ -531,6 +614,7 @@ class BatteryTrayApp:
 
     def on_exit(self, icon, item):
         self.running = False
+        self._rescan_requested.set()
         self.icon.stop()
 
     def toggle_startup(self, icon, item):
