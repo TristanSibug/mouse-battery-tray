@@ -8,10 +8,6 @@ A lightweight, standalone Windows system tray application that displays the live
 
 This tool serves as a lightweight alternative to resource-heavy official manufacturer hub software.
 
-
-This fork combines the working RAKK Gahum implementation from the fork's main
-branch with the upstream `v1.2.2-dev` modular protocol engines and expanded device
-support. Supported mice are detected automatically when the app starts.
 This is TristanSibug's fork of
 [incconutwo/mouse-battery-tray](https://github.com/incconutwo/mouse-battery-tray).
 See [CHANGELOG.md](CHANGELOG.md) for the release notes.
@@ -188,13 +184,6 @@ old tracked `build/` outputs. Existing executables are not updated by source edi
 
    ```powershell
    pythonw battery_tray.pyw
-   ```
-
-3. **Run from source for debugging:**
-   To view console logs, run:
-
-   ```powershell
-   python battery_tray.pyw
    ```
 
 ---
