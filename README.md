@@ -50,7 +50,7 @@ The application officially recognizes the following models, with dynamic fallbac
 
 ---
 
-## Fix a generic device name
+## Fix Generic Device Name
 
 **This works only when the app is already detecting your mouse's battery level.**
 It changes the displayed name; it cannot fix missing battery readings, add a
@@ -58,12 +58,25 @@ battery protocol, or reverse-engineer an unsupported mouse.
 
 If your mouse reports a battery level but has a generic or incorrect name:
 
-1. Right-click the tray icon and choose **Fix generic device name**.
+1. Right-click the tray icon and choose **Fix Generic Device Name**.
 2. The app reads that mouse's USB product name. If it is specific, it applies
    it automatically. If the hardware also reports a generic name, enter your
    mouse's model name in the dialog.
 3. The name is saved on your PC and used after restarting. You do not need to
    edit source files, run a separate extractor, or submit an issue.
+
+To reset a saved name, exit the tray app first. Names are stored as individual
+values under `HKEY_CURRENT_USER\Software\MouseBatteryTray\DeviceNames`, using
+`vid:pid` in lowercase hexadecimal as the value name. For the RAKK Gahum,
+run this in PowerShell, then restart the app:
+
+```powershell
+Remove-ItemProperty -Path 'HKCU:\Software\MouseBatteryTray\DeviceNames' -Name '25a7:fa7c'
+```
+
+This removes only the RAKK display-name override. Other settings and battery
+support are unaffected. For another mouse, remove its corresponding value
+using Registry Editor instead.
 
 The action is disabled until a recent battery reading is available. If no
 battery is detected, renaming is not a fix: that mouse may need additional
@@ -86,7 +99,7 @@ sleep time as active discharge. The estimate is approximate and depends on use.
 
 ## Features
 
-- **Fix generic device name:** Automatically use a specific USB product name or enter the model name when needed. Requires existing battery detection and changes only the displayed name.
+- **Fix Generic Device Name:** Automatically use a specific USB product name or enter the model name when needed. Requires existing battery detection and changes only the displayed name.
 - **RAKK Gahum polling:** Uses the dedicated battery request, retries missing startup readings, and supports receivers without serial numbers. Invalid initial 0% replies are ignored.
 - **Live Numeric Percentage:** Displays the exact battery level directly on the tray icon as a colored number.
 - **Color-Coded Status:**

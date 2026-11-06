@@ -44,7 +44,7 @@ def ask_device_name(current_name):
     root.attributes('-topmost', True)
     try:
         return simpledialog.askstring(
-            'Fix generic device name',
+            'Fix Generic Device Name',
             'Enter your mouse model name (80 characters maximum).\n\n'
             'This changes the displayed name only. It requires a working battery\n'
             'reading and cannot fix missing battery support.',

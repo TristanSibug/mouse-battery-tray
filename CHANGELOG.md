@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ### Added
 
-- **Fix generic device name:** A display-only action for mice already reporting a battery level. It uses a specific USB product name when available and otherwise asks for a model name. Names are saved locally by VID/PID and survive restarts; no protocol mappings are changed.
+- **Fix Generic Device Name:** A display-only action for mice already reporting a battery level. It uses a specific USB product name when available and otherwise asks for a model name. Names are saved locally by VID/PID and survive restarts; no protocol mappings are changed.
 - A visible hours-estimate status in the tray menu and an **estimating...** tooltip while discharge history is being collected.
 
 ### Fixed

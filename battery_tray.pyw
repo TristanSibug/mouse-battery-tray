@@ -278,7 +278,7 @@ class BatteryTrayApp:
     def _name_notice(self, message):
         if self.icon and self.running:
             try:
-                self.icon.notify(message, "Fix generic device name")
+                self.icon.notify(message, "Fix Generic Device Name")
             except Exception:
                 pass
 
@@ -382,7 +382,7 @@ class BatteryTrayApp:
                 lambda item: "Hours estimate: " + self.estimate_status(), None, enabled=False,
             ))
         items.append(pystray.MenuItem(
-            "Fix generic device name", self.on_fix_device_name,
+            "Fix Generic Device Name", self.on_fix_device_name,
             enabled=lambda item: self.can_fix_device_name(),
         ))
         if not self.can_fix_device_name():

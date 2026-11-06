@@ -132,10 +132,10 @@ class TrayFeatureTests(unittest.TestCase):
             return label
         with patch.object(self.tray.pystray, 'MenuItem', side_effect=item):
             self.app.create_menu()
-            self.assertFalse(actions['Fix generic device name']['enabled'](None))
+            self.assertFalse(actions['Fix Generic Device Name']['enabled'](None))
             self.assertIn('Name fix requires a detected battery level', actions)
             self.reading(time.time(), 72)
-            self.assertTrue(actions['Fix generic device name']['enabled'](None))
+            self.assertTrue(actions['Fix Generic Device Name']['enabled'](None))
 
     def test_device_switch_during_name_prompt_does_not_save_alias_to_old_mouse(self):
         self.reading(time.time(), 72)
