@@ -67,16 +67,11 @@ If your mouse reports a battery level but has a generic or incorrect name:
 
 To reset a saved name, exit the tray app first. Names are stored as individual
 values under `HKEY_CURRENT_USER\Software\MouseBatteryTray\DeviceNames`, using
-`vid:pid` in lowercase hexadecimal as the value name. For the RAKK Gahum,
-run this in PowerShell, then restart the app:
+`vid:pid` in lowercase hexadecimal as the value name. 
 
 ```powershell
-Remove-ItemProperty -Path 'HKCU:\Software\MouseBatteryTray\DeviceNames' -Name '25a7:fa7c'
+Remove-ItemProperty -Path 'HKCU:\Software\MouseBatteryTray\DeviceNames' -Name 'vid:pid'
 ```
-
-This removes only the RAKK display-name override. Other settings and battery
-support are unaffected. For another mouse, remove its corresponding value
-using Registry Editor instead.
 
 The action is disabled until a recent battery reading is available. If no
 battery is detected, renaming is not a fix: that mouse may need additional
@@ -100,7 +95,6 @@ sleep time as active discharge. The estimate is approximate and depends on use.
 ## Features
 
 - **Fix Generic Device Name:** Automatically use a specific USB product name or enter the model name when needed. Requires existing battery detection and changes only the displayed name.
-- **RAKK Gahum polling:** Uses the dedicated battery request, retries missing startup readings, and supports receivers without serial numbers. Invalid initial 0% replies are ignored.
 - **Live Numeric Percentage:** Displays the exact battery level directly on the tray icon as a colored number.
 - **Color-Coded Status:**
   - 🟢 **Green** ($\ge 50\%$) - Healthy charge
@@ -138,14 +132,13 @@ pip install hidapi pystray pillow
 
 ### Build the Windows executable
 
-1. Install Python 3.12 for Windows, including the Python launcher (`py`).
+1. Install Python for Windows, including the Python launcher (`py`).
 2. Download and extract the [current main source ZIP](https://github.com/TristanSibug/mouse-battery-tray/archive/refs/heads/main.zip).
-3. Exit the running tray app. Open **PowerShell** in the extracted folder that
-   contains `battery_tray.pyw` and `battery_tray.spec`.
+3. Exit the running tray app. Open **PowerShell** in the extracted folder that contains `battery_tray.pyw` and `battery_tray.spec`.
 4. Run these commands one line at a time:
 
 ```powershell
-py -3.12 -m venv .venv
+py -m venv .venv
 .\.venv\Scripts\python.exe -m pip install --upgrade pip
 .\.venv\Scripts\python.exe -m pip install hidapi pystray pillow pyinstaller
 .\.venv\Scripts\python.exe -m PyInstaller --noconfirm --clean --workpath "$env:TEMP\MouseBatteryTray-build" battery_tray.spec
@@ -163,28 +156,6 @@ py -3.12 -m venv .venv
 Build on **Windows**: running PyInstaller on Linux will not produce a Windows
 `.exe`. The intermediate build goes into the temporary directory, avoiding the
 old tracked `build/` outputs. Existing executables are not updated by source edits.
-
-To distribute it, create a new version tag from the tested commit, create a
-GitHub Release for that tag, upload `dist\battery_tray.exe`, and publish the
-release. Update `__version__` in `updater.py` when preparing the next release.
-The existing `v1.5.0` tag preserves the earlier release, including the retired
-local-setup feature; use current `main` for these changes. The app's update
-checker uses this fork's published releases. Recipients need only the executable.
-
-The protocol and tray-control tests can run without Windows or a USB receiver:
-
-```bash
-python -B -m unittest discover -s tests -v
-python -B tools/test_simulation.py
-```
-
-RAKK Gahum support is implemented in `protocols/rakk.py`. Because its receiver
-shares VID/PID `25a7:fa7c` with Pulsar devices, automatic polling selects RAKK
-by its FF02/2 send and FF01/0 receive interface pair, rather than by IDs alone.
-A single pair can be matched even when Windows exposes different instance
-paths without a serial number. Ambiguous pairs from multiple receivers are
-not guessed. Devices without this interface pair keep their CompX handling.
-Missing or invalid 0% RAKK startup replies are retried in the RAKK handler.
 
 ---
 
