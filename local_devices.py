@@ -10,7 +10,13 @@ import tempfile
 import time
 
 import hid
-import devices
+from protocols import get_all_handlers
+from protocols.beken import BekenProtocol, BEKEN_VIDS
+from protocols.compx import CompxProtocol, COMPX_VIDS
+from protocols.razer import RazerProtocol, RAZER_VID
+from protocols.wlmouse import WLMouseProtocol, WLMOUSE_VID
+from protocols.rakk import RakkProtocol, RAKK_VID, RAKK_PID, find_rakk_pairs
+from protocols.utils import parse_battery_telemetry
 
 
 def settings_path():
@@ -21,7 +27,7 @@ def settings_path():
 def _valid(profile):
     if not isinstance(profile, dict):
         return False
-    if profile.get("protocol") not in ("standard", "wlmouse", "razer", "rakk"):
+    if profile.get("protocol") not in ("standard", "beken", "compx", "wlmouse", "razer", "rakk"):
         return False
     if not isinstance(profile.get("name"), str) or not profile["name"].strip():
         return False
@@ -34,9 +40,11 @@ def _valid(profile):
     protocol = profile["protocol"]
     return (
         protocol == "standard"
-        or protocol == "wlmouse" and profile["vid"] == devices.WLMOUSE_VID
-        or protocol == "razer" and profile["vid"] == devices.RAZER_VID
-        or protocol == "rakk" and (profile["vid"], profile["pid"]) == (devices.RAKK_VID, devices.RAKK_PID)
+        or protocol == "beken" and profile["vid"] in BEKEN_VIDS
+        or protocol == "compx" and profile["vid"] in COMPX_VIDS
+        or protocol == "wlmouse" and profile["vid"] == WLMOUSE_VID
+        or protocol == "razer" and profile["vid"] == RAZER_VID
+        or protocol == "rakk" and (profile["vid"], profile["pid"]) == (RAKK_VID, RAKK_PID)
     )
 
 
@@ -72,15 +80,77 @@ def resolve_profile(profile, endpoints=None):
     matches = [d for d in endpoints if
                d["vendor_id"] == profile["vid"] and d["product_id"] == profile["pid"]]
     if profile["protocol"] == "rakk":
-        sender = next((d["path"] for d in matches if d.get("usage_page") == 0xFF02 and d.get("usage") == 2), None)
-        listener = next((d["path"] for d in matches if d.get("usage_page") == 0xFF01 and d.get("usage") == 0), None)
-        return (sender, listener) if sender and listener else (None, None)
+        pairs = find_rakk_pairs(matches)
+        return pairs[0] if pairs else (None, None)
     for d in matches:
         if (d.get("interface_number", -1), d.get("usage_page", 0), d.get("usage", 0)) == (
             profile["interface"], profile["usage_page"], profile["usage"]
         ):
             return d["path"], None
     return None, None
+
+
+class LocalStandardProtocol(CompxProtocol):
+    """Runtime mapping for unknown vendors: canonical packets, no active writes."""
+    canonical_only = True
+    allow_queries = False
+
+    def __init__(self, profile):
+        self.profile = profile
+        self.supported_vids = {profile["vid"]}
+        self.supported_devices = {(profile["vid"], profile["pid"]): (profile["name"], "wireless")}
+
+    def find_all_devices(self):
+        path, _ = resolve_profile(self.profile)
+        return [(path, "wireless", self.profile["name"])] if path else []
+
+
+def profile_handler(profile):
+    protocol = profile["protocol"]
+    if protocol == "standard":  # Migrate profiles written before the protocol refactor.
+        if profile["vid"] in BEKEN_VIDS:
+            protocol = "beken"
+        elif profile["vid"] in COMPX_VIDS:
+            protocol = "compx"
+        else:
+            return LocalStandardProtocol(profile)
+    return {"beken": BekenProtocol, "compx": CompxProtocol,
+            "razer": RazerProtocol, "wlmouse": WLMouseProtocol,
+            "rakk": RakkProtocol}[protocol]()
+
+
+class _BatteryProbe:
+    """Run an existing handler until its first accepted battery reading."""
+    def __init__(self, deadline, cancelled):
+        self.deadline = deadline
+        self.cancelled = cancelled
+        self.running = True
+        self.status = "disconnected"
+        self.last_battery = -1
+        self.current_model = "Mouse"
+        self.reading = (None, None)
+
+    def polling_active(self):
+        return self.running and not self.cancelled() and time.monotonic() < self.deadline
+
+    def wait_for_poll(self, seconds):
+        until = min(self.deadline, time.monotonic() + seconds)
+        while self.polling_active() and time.monotonic() < until:
+            time.sleep(min(0.02, max(0, until - time.monotonic())))
+
+    def update_tray(self):
+        pass
+
+    def update_device_state(self, path, model_name, battery, charging=False, activity=False):
+        if battery >= 0:
+            self.reading = (battery, bool(charging))
+            self.running = False
+
+
+def probe_handler(handler, path, mode, name, cancelled, deadline):
+    probe = _BatteryProbe(min(deadline, time.monotonic() + 3), cancelled)
+    handler.handle_device(probe, path, mode, name)
+    return probe.reading
 
 
 def read_standard_battery(path, seconds=2.0):
@@ -92,69 +162,66 @@ def read_standard_battery(path, seconds=2.0):
         deadline = time.monotonic() + seconds
         while time.monotonic() < deadline:
             data = dev.read(64)
-            # Require the known battery-report signature, not a mouse input report.
-            if len(data) >= 5 and data[0] == 3 and data[2] == 0x40 and 0 <= data[4] <= 100:
-                battery = data[4]
-                if data[1] == 0x85 and 0 < battery <= 10:
-                    battery *= 10
-                charging = data[3] in (2, 3, 0x80)
-                if data[1] in devices.BEKEN_DEVICE_NAMES:
-                    charging = charging or any(data[5:8])
-                return battery, bool(charging)
+            if len(data) >= 5 and data[0] == 3 and data[2] == 0x40:
+                reading = parse_battery_telemetry(list(data), data[1])
+                if reading[0] is not None:
+                    return reading
             time.sleep(0.02)
         return None, None
     finally:
         dev.close()
 
 
-def detect_mouse(cancelled=lambda: False):
-    """Return the first battery-verified profile and reading, or (None, None, None).
+def _profile(endpoint, protocol, name):
+    return {"vid": endpoint["vendor_id"], "pid": endpoint["product_id"], "name": name,
+            "protocol": protocol, "interface": endpoint.get("interface_number", -1),
+            "usage_page": endpoint.get("usage_page", 0), "usage": endpoint.get("usage", 0)}
 
-    Only vendor endpoints of mouse-like devices are probed. Unknown vendors get
-    passive reads only. Detection is bounded, and runs on the existing HID worker.
-    """
+
+def detect_mouse(cancelled=lambda: False):
+    """Verify using current protocol handlers; fall back to passive unknown OEMs."""
     endpoints = hid.enumerate()
+    deadline = time.monotonic() + 15
+    protocols = {"BekenProtocol": "beken", "CompxProtocol": "compx",
+                 "WLMouseProtocol": "wlmouse", "RazerProtocol": "razer", "RakkProtocol": "rakk"}
+    for handler in get_all_handlers():
+        for path, mode, name in handler.find_all_devices():
+            if cancelled() or time.monotonic() >= deadline:
+                return None, None, None
+            # A cable connection without a battery reply is not a verified setup.
+            if mode == "wired":
+                continue
+            endpoint = next((d for d in endpoints if d["path"] == path), None)
+            if endpoint is None:
+                continue
+            try:
+                battery, charging = probe_handler(handler, path, mode, name, cancelled, deadline)
+            except OSError:
+                continue
+            if battery is not None:
+                return _profile(endpoint, protocols[type(handler).__name__], name), battery, bool(charging)
+
     mouse_ids = {(d["vendor_id"], d["product_id"]) for d in endpoints
                  if d.get("usage_page") == 1 and d.get("usage") == 2}
-    deadline = time.monotonic() + 15
+    known_vids = BEKEN_VIDS | COMPX_VIDS | {RAZER_VID, WLMOUSE_VID}
     for d in endpoints:
         if cancelled() or time.monotonic() >= deadline:
             break
         vid, pid = d["vendor_id"], d["product_id"]
+        if vid in known_vids:
+            continue  # Don't bypass the known handler's stricter validation.
         product = d.get("product_string") or ""
         if any(word in product.lower() for word in ("keyboard", "microphone", "audio", "headset")):
             continue
-        if (vid, pid) not in mouse_ids and "mouse" not in product.lower() and vid not in devices.SUPPORTED_VIDS | {devices.WLMOUSE_VID}:
+        if (vid, pid) not in mouse_ids and "mouse" not in product.lower():
             continue
         page = d.get("usage_page", 0)
-        # Never interpret ordinary keyboard/movement reports as battery packets.
-        razer_feature = vid == devices.RAZER_VID and page == 1 and d.get("usage") in (2, 6)
-        if page < 0xFF00 and page != 10 and not razer_feature:
-            continue
-        protocol = "standard"
-        if vid == devices.WLMOUSE_VID:
-            protocol = "wlmouse"
-        elif vid == devices.RAZER_VID:
-            protocol = "razer"
-        elif (vid, pid) == (devices.RAKK_VID, devices.RAKK_PID) and page == 0xFF02:
-            protocol = "rakk"
-        profile = {"vid": vid, "pid": pid, "name": product or "Wireless Mouse",
-                   "protocol": protocol, "interface": d.get("interface_number", -1),
-                   "usage_page": page, "usage": d.get("usage", 0)}
-        path, listener = resolve_profile(profile, endpoints)
-        if path is None:
+        if page < 0xFF00 and page != 10:
             continue
         try:
-            if protocol == "wlmouse":
-                battery, charging = devices._wlmouse_read_feature(path)
-            elif protocol == "razer":
-                battery, charging = devices.read_razer_battery(path)
-            elif protocol == "rakk":
-                battery, charging = devices.read_rakk_battery(path, listener)
-            else:
-                battery, charging = read_standard_battery(path)
+            battery, charging = read_standard_battery(d["path"], min(2, max(0, deadline - time.monotonic())))
         except OSError:
             continue
         if battery is not None:
-            return profile, battery, bool(charging)
+            return _profile(d, "standard", product or "Wireless Mouse"), battery, bool(charging)
     return None, None, None

@@ -1,0 +1,584 @@
+import time
+import copy
+import sys
+import os
+from unittest.mock import MagicMock, patch
+
+# Ensure parent project root is in python path
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+sys.path.insert(0, os.path.abspath("."))
+
+from protocols import get_all_handlers
+from protocols.utils import parse_battery_telemetry
+
+
+def filtered_enumeration(endpoints):
+    """Match hidapi's vendor/product filtering rather than returning every mouse."""
+    def enumerate_devices(vid=0, pid=0):
+        return [d for d in endpoints if (not vid or d['vendor_id'] == vid)
+                and (not pid or d['product_id'] == pid)]
+    return enumerate_devices
+
+class MockApp:
+    def __init__(self):
+        self.running = True
+        self.status = "disconnected"
+        self.last_battery = -1
+        self.current_model = "Unknown"
+        self.last_theme = "dark"
+        self.last_update_check_time = time.time()
+        self._updates_checked = False
+
+    def update_tray(self):
+        pass
+
+    def update_battery_level(self, battery: int, charging: bool = False):
+        self.last_battery = battery
+        self.status = "charging" if charging else "connected"
+
+    def update_device_state(self, path: str, model_name: str, battery: int, charging: bool = False, activity: bool = False):
+        self.current_model = model_name
+        self.update_battery_level(battery, charging)
+
+    def check_for_updates(self, manual=False):
+        pass
+
+
+class MockHIDDevice:
+    def __init__(self, path, test_case):
+        self.path = path
+        self.test_case = test_case
+        self.feature_reports_sent = []
+        self.closed = False
+
+    def open_path(self, path):
+        pass
+
+    def set_nonblocking(self, mode):
+        pass
+
+    def close(self):
+        self.closed = True
+
+    def read(self, length):
+        # Return programmed telemetry packet once, then empty
+        if self.test_case.get("read_packets"):
+            return self.test_case["read_packets"].pop(0)
+        return []
+
+    def send_feature_report(self, bytes_data):
+        self.feature_reports_sent.append(list(bytes_data))
+
+    def get_feature_report(self, report_id, length):
+        if self.test_case.get("feature_replies"):
+            return self.test_case["feature_replies"].get(report_id, [])
+        return []
+
+
+# Complete Matrix of Test Devices & Simulated Telemetry Packets
+TEST_DEVICE_MATRIX = [
+    # ---------------------------------------------------------
+    # BEKEN PROTOCOL (Attack Shark / Beken OEM)
+    # ---------------------------------------------------------
+    {
+        "name": "Attack Shark X11 (2.4G Wireless)",
+        "expected_model": "Attack Shark X11",
+        "expected_mode": "wireless",
+        "expected_protocol": "BekenProtocol",
+        "enum_dicts": [{
+            "vendor_id": 0x1d57, "product_id": 0xfa60, "product_string": "2.4G Wireless Receiver",
+            "interface_number": 2, "usage_page": 10, "path": "\\\\?\\hid#vid_1d57&pid_fa60#001"
+        }],
+        # Simulated Beken packet: [0x03, 0x55 (X11 ID), 0x40, 0x00, 44 (44% batt), ...]
+        "read_packets": [[0x03, 0x55, 0x40, 0x00, 44, 0x00, 0x00, 0x00]],
+        "expected_batt": 44,
+        "disallow_feature_queries": True
+    },
+    {
+        "name": "Attack Shark X6 (2.4G Wireless)",
+        "expected_model": "Attack Shark X6",
+        "expected_mode": "wireless",
+        "expected_protocol": "BekenProtocol",
+        "enum_dicts": [{
+            "vendor_id": 0x1d57, "product_id": 0xfa62, "product_string": "Attack Shark X6",
+            "interface_number": 2, "usage_page": 10, "path": "\\\\?\\hid#vid_1d57&pid_fa62#001"
+        }],
+        # Simulated Beken packet: [0x03, 0x85 (X6 ID), 0x40, 0x00, 8 (8*10=80% scaling), ...]
+        "read_packets": [[0x03, 0x85, 0x40, 0x00, 8, 0x00, 0x00, 0x00]],
+        "expected_batt": 80,
+        "disallow_feature_queries": True
+    },
+    {
+        "name": "Attack Shark R1 (Wired Mode)",
+        "expected_model": "Attack Shark R1",
+        "expected_mode": "wired",
+        "expected_protocol": "BekenProtocol",
+        "enum_dicts": [{
+            "vendor_id": 0x1d57, "product_id": 0xfa61, "product_string": "Attack Shark R1 Wired",
+            "interface_number": 0, "usage_page": 1, "path": "\\\\?\\hid#vid_1d57&pid_fa61#001"
+        }],
+        "read_packets": [],
+        "expected_status": "charging",
+        "disallow_feature_queries": True
+    },
+
+    # ---------------------------------------------------------
+    # COMPX / NORDIC PROTOCOL (Pulsar, VXE, Scyrox, Lamzu, G-Wolves, MAMBASNAKE, Hitscan, Cherry Xtrfy, Incott)
+    # ---------------------------------------------------------
+    {
+        "name": "VXE R1 Pro / Pro Max",
+        "expected_model": "VXE R1 Pro / Pro Max",
+        "expected_mode": "wireless",
+        "expected_protocol": "CompxProtocol",
+        "enum_dicts": [{
+            "vendor_id": 0x3554, "product_id": 0xf58a, "product_string": "VXE R1 Pro Receiver",
+            "interface_number": 2, "usage_page": 0xff04, "path": "\\\\?\\hid#vid_3554&pid_f58a#001"
+        }],
+        # Feature report 0x06 reply payload: [0x06, 0x00, 0x00, 0x00, 85 (85% batt), ...]
+        "read_packets": [],
+        "feature_replies": {6: [0x06, 0x00, 0x00, 0x00, 85, 0x00]},
+        "expected_batt": 85
+    },
+    {
+        "name": "Pulsar 8K Dongle Gen.2",
+        "expected_model": "Pulsar 8K Dongle Gen.2",
+        "expected_mode": "wireless",
+        "expected_protocol": "CompxProtocol",
+        "enum_dicts": [{
+            "vendor_id": 0x3710, "product_id": 0x5406, "product_string": "Pulsar 8K Dongle",
+            "interface_number": 2, "usage_page": 10, "path": "\\\\?\\hid#vid_3710&pid_5406#001"
+        }],
+        "read_packets": [[0x03, 0x00, 0x40, 0x00, 92, 0x00]],
+        "expected_batt": 92
+    },
+    {
+        "name": "Scyrox V6 8K",
+        "expected_model": "Scyrox V6 8K",
+        "expected_mode": "wireless",
+        "expected_protocol": "CompxProtocol",
+        "enum_dicts": [{
+            "vendor_id": 0x3554, "product_id": 0xf5f7, "product_string": "Scyrox V6 8K Receiver",
+            "interface_number": 2, "usage_page": 10, "path": "\\\\?\\hid#vid_3554&pid_f5f7#001"
+        }],
+        "read_packets": [[0x03, 0x00, 0x40, 0x00, 68, 0x00]],
+        "expected_batt": 68
+    },
+    {
+        "name": "Lamzu Maya X 8K",
+        "expected_model": "Lamzu Maya X 8K",
+        "expected_mode": "wireless",
+        "expected_protocol": "CompxProtocol",
+        "enum_dicts": [{
+            "vendor_id": 0x373e, "product_id": 0x001e, "product_string": "Lamzu 8K Dongle",
+            "interface_number": 2, "usage_page": 10, "path": "\\\\?\\hid#vid_373e&pid_001e#001"
+        }],
+        "read_packets": [[0x03, 0x00, 0x40, 0x00, 77, 0x00]],
+        "expected_batt": 77
+    },
+    {
+        "name": "G-Wolves Fenrir Pro 8K",
+        "expected_model": "G-Wolves Fenrir Pro 8K",
+        "expected_mode": "wireless",
+        "expected_protocol": "CompxProtocol",
+        "enum_dicts": [{
+            "vendor_id": 0x33e4, "product_id": 0x3854, "product_string": "G-Wolves 8K Dongle",
+            "interface_number": 2, "usage_page": 10, "path": "\\\\?\\hid#vid_33e4&pid_3854#001"
+        }],
+        "read_packets": [[0x03, 0x00, 0x40, 0x00, 55, 0x00]] * 2,
+        "expected_batt": 55
+    },
+    {
+        "name": "Hitscan Hyperlight 8K",
+        "expected_model": "Hitscan Hyperlight",
+        "expected_mode": "wireless",
+        "expected_protocol": "CompxProtocol",
+        "enum_dicts": [{
+            "vendor_id": 0x3770, "product_id": 0x0300, "product_string": "Hitscan 8K Receiver",
+            "interface_number": 2, "usage_page": 10, "path": "\\\\?\\hid#vid_3770&pid_0300#001"
+        }],
+        "read_packets": [[0x03, 0x00, 0x40, 0x00, 64, 0x00]],
+        "expected_batt": 64
+    },
+    {
+        "name": "Cherry Xtrfy M68 Wireless",
+        "expected_model": "Cherry Xtrfy M68 Wireless",
+        "expected_mode": "wireless",
+        "expected_protocol": "CompxProtocol",
+        "enum_dicts": [{
+            "vendor_id": 0x046a, "product_id": 0x0330, "product_string": "M68 Receiver",
+            "interface_number": 2, "usage_page": 10, "path": "\\\\?\\hid#vid_046a&pid_0330#001"
+        }],
+        "read_packets": [[0x03, 0x00, 0x40, 0x00, 90, 0x00]],
+        "expected_batt": 90
+    },
+
+    # ---------------------------------------------------------
+    # WLMOUSE PROTOCOL (WLMouse Beast X)
+    # ---------------------------------------------------------
+    {
+        "name": "WLMouse Beast X Mini Pro",
+        "expected_model": "WLMouse Beast X Mini Pro",
+        "expected_mode": "wireless",
+        "expected_protocol": "WLMouseProtocol",
+        "enum_dicts": [{
+            "vendor_id": 0x36a7, "product_id": 0xa868, "product_string": "WLMouse Beast X",
+            "usage_page": 0xffff, "usage": 0x00, "path": "\\\\?\\hid#vid_36a7&pid_a868#001"
+        }],
+        # Feature report 0 payload: [0x00, 0x00, 0xa1, 0x00, 0x02, 0x02, 0x00, 0x83, 0x00 (not charging), 72 (72% batt)]
+        "read_packets": [],
+        "feature_replies": {0: [0x00, 0x00, 0xa1, 0x00, 0x02, 0x02, 0x00, 0x83, 0x00, 72]},
+        "expected_batt": 72
+    },
+
+    # ---------------------------------------------------------
+    # RAZER PROTOCOL (OpenRazer 90-Byte Feature Query)
+    # ---------------------------------------------------------
+    {
+        "name": "Razer DeathAdder V3",
+        "expected_model": "Razer DeathAdder V3",
+        "expected_mode": "wireless",
+        "expected_protocol": "RazerProtocol",
+        # Correct interface: usage_page=0x0001, usage=0x0006 (keyboard-control) scores highest
+        "enum_dicts": [{
+            "vendor_id": 0x1532, "product_id": 0x00b2, "product_string": "Razer DeathAdder V3",
+            "usage_page": 0x0001, "usage": 0x0006, "interface_number": 3,
+            "path": "\\\\?\\hid#vid_1532&pid_00b2#001"
+        }],
+        "read_packets": [],
+        # Correct 90-byte response layout:
+        # [0]=status(0x02=ok), [1]=tx_id, [2..4]=reserved, [5]=data_size, [6]=class(0x07), [7]=cmd(0x02), [8]=battery(65), [9]=charging(0)
+        "feature_replies": {0: [0x02, 0x1f, 0x00, 0x00, 0x00, 0x02, 0x07, 0x02, 65, 0x00] + [0]*80},
+        "expected_batt": 65
+    },
+    {
+        "name": "Razer HyperPolling Dongle",
+        "expected_model": "Razer HyperPolling Dongle",
+        "expected_mode": "wireless",
+        "expected_protocol": "RazerProtocol",
+        "enum_dicts": [{
+            "vendor_id": 0x1532, "product_id": 0x00b3, "product_string": "Razer HyperPolling Dongle",
+            "usage_page": 0x0001, "usage": 0x0006, "interface_number": 3,
+            "path": "\\\\?\\hid#vid_1532&pid_00b3#001"
+        }],
+        "read_packets": [],
+        "feature_replies": {0: [0x02, 0x1f, 0x00, 0x00, 0x00, 0x02, 0x07, 0x02, 204, 0x00] + [0]*80},
+        # 204/255 * 100 = 80%
+        "expected_batt": 80
+    },
+
+    # ---------------------------------------------------------
+    # ADDITIONAL BRAND VARIANTS
+    # ---------------------------------------------------------
+    {
+        "name": "Attack Shark X3 (Wired)",
+        "expected_model": "Attack Shark X3",
+        "expected_mode": "wired",
+        "expected_protocol": "BekenProtocol",
+        "enum_dicts": [{
+            "vendor_id": 0x1d57, "product_id": 0xfa50, "product_string": "Attack Shark X3",
+            "interface_number": 0, "usage_page": 1, "path": "\\\\?\\hid#vid_1d57&pid_fa50#001"
+        }],
+        "read_packets": [],
+        "expected_status": "charging",
+        "disallow_feature_queries": True
+    },
+    {
+        "name": "Pulsar Xlite / X2 Series",
+        "expected_model": "Pulsar X2 / Xlite Series",
+        "expected_mode": "wireless",
+        "expected_protocol": "CompxProtocol",
+        "enum_dicts": [{
+            "vendor_id": 0x25a7, "product_id": 0xfa7c, "product_string": "Pulsar Receiver",
+            "interface_number": 2, "usage_page": 10, "path": "\\\\?\\hid#vid_25a7&pid_fa7c#001"
+        }],
+        "read_packets": [[0x03, 0x00, 0x40, 0x00, 88, 0x00]],
+        "expected_batt": 88
+    },
+    {
+        "name": "Pulsar X2 CrazyLight (Wired)",
+        "expected_model": "Pulsar X2 CrazyLight",
+        "expected_mode": "wired",
+        "expected_protocol": "CompxProtocol",
+        "enum_dicts": [{
+            "vendor_id": 0x3710, "product_id": 0x3414, "product_string": "CrazyLight Cable",
+            "interface_number": 0, "usage_page": 1, "path": "\\\\?\\hid#vid_3710&pid_3414#001"
+        }],
+        "read_packets": [],
+        "expected_status": "charging"
+    },
+    {
+        "name": "G-Wolves HTX Ultra 8K",
+        "expected_model": "G-Wolves HTX Ultra 8K",
+        "expected_mode": "wireless",
+        "expected_protocol": "CompxProtocol",
+        "enum_dicts": [{
+            "vendor_id": 0x33e4, "product_id": 0x5617, "product_string": "HTX Ultra Dongle",
+            "interface_number": 2, "usage_page": 10, "path": "\\\\?\\hid#vid_33e4&pid_5617#001"
+        }],
+        "read_packets": [[0x03, 0x00, 0x40, 0x00, 48, 0x00]] * 2,
+        "expected_batt": 48
+    },
+    {
+        "name": "MAMBASNAKE M5 Ultra",
+        "expected_model": "Mambasnake M5 Ultra",
+        "expected_mode": "wireless",
+        "expected_protocol": "CompxProtocol",
+        "enum_dicts": [{
+            "vendor_id": 0x373e, "product_id": 0x0050, "product_string": "M5 Ultra Dongle",
+            "interface_number": 2, "usage_page": 10, "path": "\\\\?\\hid#vid_373e&pid_0050#001"
+        }],
+        "read_packets": [[0x03, 0x00, 0x40, 0x00, 95, 0x00]],
+        "expected_batt": 95
+    },
+    {
+        "name": "Incott G24 Pro (8K Dongle)",
+        "expected_model": "Incott G24 Pro",
+        "expected_mode": "wireless",
+        "expected_protocol": "CompxProtocol",
+        "enum_dicts": [{
+            "vendor_id": 0x093a, "product_id": 0x522c, "product_string": "Incott 8K Receiver",
+            "interface_number": 2, "usage_page": 10, "path": "\\\\?\\hid#vid_093a&pid_522c#001"
+        }],
+        "read_packets": [[0x03, 0x00, 0x40, 0x00, 82, 0x00]],
+        "expected_batt": 82
+    },
+    {
+        "name": "WLMouse Beast X",
+        "expected_model": "WLMouse Beast X",
+        "expected_mode": "wireless",
+        "expected_protocol": "WLMouseProtocol",
+        "enum_dicts": [{
+            "vendor_id": 0x36a7, "product_id": 0xa887, "product_string": "WLMouse Beast X",
+            "usage_page": 0xffff, "usage": 0x00, "path": "\\\\?\\hid#vid_36a7&pid_a887#001"
+        }],
+        "read_packets": [],
+        "feature_replies": {0: [0x00, 0x00, 0xa1, 0x00, 0x02, 0x02, 0x00, 0x83, 0x00, 99]},
+        "expected_batt": 99
+    }
+]
+
+
+def run_simulation_tests():
+    print("\n" + "="*80)
+    print(" === RUNNING MOUSE SIMULATION & PROTOCOL INTEGRITY TEST SUITE ===")
+    print("="*80 + "\n")
+
+    passed_count = 0
+    failed_count = 0
+    handlers = get_all_handlers()
+
+    for idx, original in enumerate(TEST_DEVICE_MATRIX, 1):
+        tc = copy.deepcopy(original)
+        test_name = tc["name"]
+        print(f"Test #{idx:02d}: {test_name:<40}", end="")
+
+        mock_dev = None
+
+        mock_enum = filtered_enumeration(tc["enum_dicts"])
+
+        def mock_device_factory():
+            nonlocal mock_dev
+            mock_dev = MockHIDDevice(tc["enum_dicts"][0]["path"], tc)
+            return mock_dev
+
+        with patch("hid.enumerate", side_effect=mock_enum), \
+             patch("hid.device", side_effect=mock_device_factory):
+
+            matched_handler = None
+            found_path = None
+            found_mode = None
+            found_model = None
+
+            for h in handlers:
+                path, mode, model = h.find_device()
+                if path:
+                    matched_handler = h
+                    found_path, found_mode, found_model = path, mode, model
+                    break
+
+            if not matched_handler:
+                print("[FAILED]: Device not discovered by any protocol handler")
+                failed_count += 1
+                continue
+
+            handler_class = matched_handler.__class__.__name__
+            if handler_class != tc["expected_protocol"]:
+                print(f"[FAILED]: Matched protocol {handler_class}, expected {tc['expected_protocol']}")
+                failed_count += 1
+                continue
+
+
+
+            if found_mode != tc["expected_mode"]:
+                print(f"[FAILED]: Mode resolved as '{found_mode}', expected '{tc['expected_mode']}'")
+                failed_count += 1
+                continue
+
+            # Execute 1 iteration of handle_device
+            mock_app = MockApp()
+
+            # Shorten sleep during test loop
+            sleep_count = 0
+            def bounded_sleep(seconds):
+                nonlocal sleep_count
+                sleep_count += 1
+                if sleep_count >= 60:
+                    mock_app.running = False
+
+            with patch("time.sleep", side_effect=bounded_sleep):
+                orig_update_batt = mock_app.update_battery_level
+                def wrap_update_batt(batt, charging=False):
+                    orig_update_batt(batt, charging)
+                    mock_app.running = False
+
+                orig_update_tray = mock_app.update_tray
+                def wrap_update_tray():
+                    orig_update_tray()
+                    if mock_app.status == "charging":
+                        mock_app.running = False
+
+                mock_app.update_battery_level = wrap_update_batt
+                mock_app.update_tray = wrap_update_tray
+
+                try:
+                    matched_handler.handle_device(mock_app, found_path, found_mode, found_model)
+                except Exception as e:
+                    print(f"[FAILED]: Exception in handle_device: {e}")
+                    failed_count += 1
+                    continue
+
+            # Verify dynamic model name after handle_device resolution
+            if mock_app.current_model != tc["expected_model"] and found_model != tc["expected_model"]:
+                print(f"[FAILED]: Model resolved as '{mock_app.current_model}', expected '{tc['expected_model']}'")
+                failed_count += 1
+                continue
+
+            # Verify battery reading
+            if "expected_batt" in tc:
+                if mock_app.last_battery != tc["expected_batt"]:
+                    print(f"❌ FAILED: Extracted battery {mock_app.last_battery}%, expected {tc['expected_batt']}%")
+                    failed_count += 1
+                    continue
+
+            # Verify protocol safety guards (e.g. no feature reports for Beken)
+            if tc.get("disallow_feature_queries") and mock_dev:
+                if len(mock_dev.feature_reports_sent) > 0:
+                    print(f"[FAILED]: Feature queries were improperly sent to safety-guarded Beken device!")
+                    failed_count += 1
+                    continue
+
+            print("[PASSED]")
+            passed_count += 1
+
+    print("\n" + "="*80)
+    print(f" TEST RESULTS SUMMARY: {passed_count}/{len(TEST_DEVICE_MATRIX)} Passed")
+    print("="*80 + "\n")
+
+    return failed_count
+
+def run_negative_edgecase_tests():
+    print("\n" + "-"*80)
+    print(" === RUNNING NEGATIVE EDGE-CASE TELEMETRY TESTS ===")
+    print("-"*80 + "\n")
+
+    negative_cases = [
+        # (packet, device_id, is_beken, description)
+        ([0x06, 0x10, 0x00, 0x00, 0x00], None, False, "VXE R1 SE Heartbeat with ID 0x10 at index 1"),
+        ([0x03, 0x10, 0x00, 0x02, 0x00], None, False, "CompX packet with Subtype 0x02 at index 3 and zero battery at index 4"),
+        ([0x06, 0x00, 0x00, 0x00, 0x00], None, False, "Generic report with 0 battery"),
+        ([0x02, 0x00], None, False, "Truncated short HID report (< 3 bytes)"),
+        ([0x06, 0x00, 0x00, 100, 100, 100, 212, 193, 4, 0, 111, 110, 103, 108, 101], None, False, "Pulsar 8K Dongle Gen.2 String Descriptor report (0x64 header)"),
+    ]
+
+    failed = 0
+    for idx, (pkt, dev_id, is_beken, desc) in enumerate(negative_cases, 1):
+        print(f"Edge Case #{idx:02d}: {desc:<65}", end="")
+        batt, charging = parse_battery_telemetry(pkt, dev_id, is_beken)
+        if batt is not None:
+            print(f"[FAILED]: Wrongly parsed battery {batt}% from non-telemetry packet!")
+            failed += 1
+        else:
+            print("[PASSED]")
+
+    # Additional strict-mode VID tests (require vid= argument)
+    strict_cases = [
+        # Incott polling-rate config packet: 0x03 report, data[2] != 0x40 → no 0x40 marker → strict VID should reject
+        ([0x03, 0x00, 0x01, 0x00, 33, 0x00], None, False, 0x093a, "Incott polling-rate config (vid=0x093a, strict-mode should reject)"),
+        # G-Wolves ambient input report lacks the canonical marker and must be rejected.
+        ([0x03, 0x00, 0x00, 0x00, 48, 0x00], None, False, 0x33e4, "G-Wolves ambient packet rejected by strict mode (vid=0x33e4)"),
+    ]
+    print()
+    for idx, (pkt, dev_id, is_beken, vid, desc) in enumerate(strict_cases, len(negative_cases) + 1):
+        print(f"Edge Case #{idx:02d}: {desc:<65}", end="")
+        batt, charging = parse_battery_telemetry(pkt, dev_id, is_beken, vid=vid)
+        # Incott case: strict-mode MUST reject
+        if vid == 0x093a:
+            if batt is not None:
+                print(f"[FAILED]: Strict-mode VID 0x093a failed to block polling-rate packet (got {batt}%)")
+                failed += 1
+            else:
+                print("[PASSED]")
+        elif vid == 0x33e4:
+            if batt is not None:
+                print(f"[FAILED]: Strict-mode VID 0x33e4 accepted ambient packet ({batt}%)")
+                failed += 1
+            else:
+                print("[PASSED]")
+
+    return failed
+
+
+def run_device_deduplication_tests():
+    print("\n" + "-"*80)
+    print(" === RUNNING PHYSICAL DEVICE DEDUPLICATION TESTS ===")
+    print("-"*80 + "\n")
+
+    failed = 0
+
+    # Test 1: Single physical mouse with 6 HID collection endpoints
+    mock_6_endpoints = [
+        {"vendor_id": 0x1d57, "product_id": 0xfa60, "product_string": "Attack Shark X11 Receiver", "interface_number": 0, "usage_page": 1, "path": "\\\\?\\hid#vid_1d57&pid_fa60&mi_00#7&1f2d3e4&0&0000#{4d1e}"},
+        {"vendor_id": 0x1d57, "product_id": 0xfa60, "product_string": "Attack Shark X11 Receiver", "interface_number": 1, "usage_page": 1, "path": "\\\\?\\hid#vid_1d57&pid_fa60&mi_01#7&1f2d3e4&0&0000#{4d1e}"},
+        {"vendor_id": 0x1d57, "product_id": 0xfa60, "product_string": "Attack Shark X11 Receiver", "interface_number": 2, "usage_page": 10, "path": "\\\\?\\hid#vid_1d57&pid_fa60&mi_02#7&1f2d3e4&0&0000#{4d1e}"},
+        {"vendor_id": 0x1d57, "product_id": 0xfa60, "product_string": "Attack Shark X11 Receiver", "interface_number": -1, "usage_page": 0xff00, "path": "\\\\?\\hid#vid_1d57&pid_fa60&col01#7&1f2d3e4&0&0000#{4d1e}"},
+        {"vendor_id": 0x1d57, "product_id": 0xfa60, "product_string": "Attack Shark X11 Receiver", "interface_number": -1, "usage_page": 0xff01, "path": "\\\\?\\hid#vid_1d57&pid_fa60&col02#7&1f2d3e4&0&0000#{4d1e}"},
+        {"vendor_id": 0x1d57, "product_id": 0xfa60, "product_string": "Attack Shark X11 Receiver", "interface_number": -1, "usage_page": 0xff02, "path": "\\\\?\\hid#vid_1d57&pid_fa60&col03#7&1f2d3e4&0&0000#{4d1e}"},
+    ]
+
+    print(f"Dedup Test #01: Single mouse with 6 endpoints deduplicated to 1 device: ", end="")
+    with patch("hid.enumerate", side_effect=filtered_enumeration(mock_6_endpoints)):
+        from protocols.beken import BekenProtocol
+        handler = BekenProtocol()
+        found = handler.find_all_devices()
+        if len(found) == 1 and found[0][2] == "Attack Shark Mouse":
+            print("[PASSED]")
+        else:
+            print(f"[FAILED]: Expected 1 device, got {len(found)} devices")
+            failed += 1
+
+    # Test 2: Two distinct physical mice connected (Attack Shark X11 + Pulsar X2)
+    mock_2_mice = mock_6_endpoints + [
+        {"vendor_id": 0x25a7, "product_id": 0xfa7c, "product_string": "Pulsar Receiver", "interface_number": 2, "usage_page": 10, "path": "\\\\?\\hid#vid_25a7&pid_fa7c&mi_02#7&3b4a2c&0&0000#{4d1e}"},
+        {"vendor_id": 0x25a7, "product_id": 0xfa7c, "product_string": "Pulsar Receiver", "interface_number": 0, "usage_page": 1, "path": "\\\\?\\hid#vid_25a7&pid_fa7c&mi_00#7&3b4a2c&0&0000#{4d1e}"},
+    ]
+
+    print(f"Dedup Test #02: Two distinct physical mice detected as 2 devices:   ", end="")
+    with patch("hid.enumerate", side_effect=filtered_enumeration(mock_2_mice)):
+        handlers = get_all_handlers()
+        all_found = []
+        for h in handlers:
+            all_found.extend(h.find_all_devices())
+        if len(all_found) == 2:
+            print("[PASSED]")
+        else:
+            print(f"[FAILED]: Expected 2 devices, got {len(all_found)} devices")
+            failed += 1
+
+    return failed
+
+
+if __name__ == "__main__":
+    edge_failures = run_negative_edgecase_tests()
+    dedup_failures = run_device_deduplication_tests()
+    sim_failures = run_simulation_tests()
+    sys.exit(edge_failures + dedup_failures + sim_failures)

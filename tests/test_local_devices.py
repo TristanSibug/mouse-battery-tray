@@ -10,11 +10,21 @@ from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import local_devices as local
+from protocols import rakk, razer, wlmouse
+from protocols.beken import BekenProtocol
+from protocols.compx import CompxProtocol
+
+
+def enumeration(endpoints):
+    def enumerate_devices(vid=0, pid=0):
+        return [d for d in endpoints if (not vid or d['vendor_id'] == vid)
+                and (not pid or d['product_id'] == pid)]
+    return enumerate_devices
 
 
 def endpoint(vid=0x9999, pid=1, page=0xFF01, usage=1, path=b"vendor"):
     return dict(vendor_id=vid, product_id=pid, product_string="Test Mouse",
-                interface_number=2, usage_page=page, usage=usage, path=path)
+                interface_number=2, usage_page=page, usage=usage, path=path, serial_number="test-device")
 
 
 PROFILE = dict(vid=0x9999, pid=1, name="Test Mouse", protocol="standard",
@@ -23,33 +33,33 @@ PROFILE = dict(vid=0x9999, pid=1, name="Test Mouse", protocol="standard",
 
 class DiscoveryTests(unittest.TestCase):
     def test_unknown_vendor_passive_detection_and_saved_endpoint(self):
-        with patch.object(local.hid, "enumerate", return_value=[endpoint()]), \
+        with patch.object(local.hid, "enumerate", side_effect=enumeration([endpoint()])), \
              patch.object(local, "read_standard_battery", return_value=(75, False)) as read:
             self.assertEqual(local.detect_mouse(), (PROFILE, 75, False))
-            read.assert_called_once_with(b"vendor")
+            self.assertEqual(read.call_args.args[0], b"vendor")
 
     def test_no_battery_response_does_not_register_device(self):
-        with patch.object(local.hid, "enumerate", return_value=[endpoint()]), \
+        with patch.object(local.hid, "enumerate", side_effect=enumeration([endpoint()])), \
              patch.object(local, "read_standard_battery", return_value=(None, None)):
             self.assertEqual(local.detect_mouse(), (None, None, None))
 
     def test_unnamed_non_mouse_device_is_not_probed(self):
         device = {**endpoint(), "product_string": None}
-        with patch.object(local.hid, "enumerate", return_value=[device]), \
+        with patch.object(local.hid, "enumerate", side_effect=enumeration([device])), \
              patch.object(local, "read_standard_battery") as read:
             self.assertEqual(local.detect_mouse(), (None, None, None))
             read.assert_not_called()
 
     def test_razer_mouse_collection_can_be_queried_without_vendor_collection(self):
-        device = endpoint(vid=local.devices.RAZER_VID, page=1, usage=2)
-        with patch.object(local.hid, "enumerate", return_value=[device]), \
-             patch.object(local.devices, "read_razer_battery", return_value=(60, False)):
+        device = endpoint(vid=local.RAZER_VID, page=1, usage=2)
+        with patch.object(local.hid, "enumerate", side_effect=enumeration([device])), \
+             patch.object(razer, "_read_razer_battery", return_value=(60, False)):
             self.assertEqual(local.detect_mouse()[1], 60)
 
     def test_keyboard_and_movement_endpoints_are_not_probed(self):
         keyboard = endpoint()
         keyboard["product_string"] = "USB Keyboard"
-        with patch.object(local.hid, "enumerate", return_value=[keyboard, endpoint(page=1, usage=2)]), \
+        with patch.object(local.hid, "enumerate", side_effect=enumeration([keyboard, endpoint(page=1, usage=2)])), \
              patch.object(local, "read_standard_battery") as read:
             self.assertEqual(local.detect_mouse(), (None, None, None))
             read.assert_not_called()
@@ -57,18 +67,18 @@ class DiscoveryTests(unittest.TestCase):
     def test_unknown_vendor_with_generic_name_uses_mouse_collection(self):
         mouse, vendor = endpoint(page=1, usage=2), endpoint()
         mouse["product_string"] = vendor["product_string"] = "USB Receiver"
-        with patch.object(local.hid, "enumerate", return_value=[mouse, vendor]), \
+        with patch.object(local.hid, "enumerate", side_effect=enumeration([mouse, vendor])), \
              patch.object(local, "read_standard_battery", return_value=(50, True)):
             profile, battery, charging = local.detect_mouse()
             self.assertEqual((profile["name"], battery, charging), ("USB Receiver", 50, True))
 
     def test_inaccessible_endpoint_does_not_abort_other_candidates(self):
-        with patch.object(local.hid, "enumerate", return_value=[endpoint(path=b"busy"), endpoint(path=b"ok")]), \
+        with patch.object(local.hid, "enumerate", side_effect=enumeration([endpoint(path=b"busy"), endpoint(path=b"ok")])), \
              patch.object(local, "read_standard_battery", side_effect=[OSError("busy"), (30, False)]):
             self.assertEqual(local.detect_mouse()[1], 30)
 
     def test_cancelled_scan_does_not_probe(self):
-        with patch.object(local.hid, "enumerate", return_value=[endpoint()]), \
+        with patch.object(local.hid, "enumerate", side_effect=enumeration([endpoint()])), \
              patch.object(local, "read_standard_battery") as read:
             self.assertEqual(local.detect_mouse(lambda: True), (None, None, None))
             read.assert_not_called()
@@ -107,21 +117,21 @@ class DiscoveryTests(unittest.TestCase):
         device.send_feature_report.assert_not_called()
 
     def test_razer_and_wlmouse_use_their_own_readers(self):
-        for vid, protocol, reader in [(local.devices.RAZER_VID, "razer", "read_razer_battery"),
-                                       (local.devices.WLMOUSE_VID, "wlmouse", "_wlmouse_read_feature")]:
+        for vid, protocol, module, reader in [(local.RAZER_VID, "razer", razer, "_read_razer_battery"),
+                                               (local.WLMOUSE_VID, "wlmouse", wlmouse, "_wlmouse_read_feature")]:
             with self.subTest(protocol=protocol), \
-                 patch.object(local.hid, "enumerate", return_value=[endpoint(vid=vid)]), \
-                 patch.object(local.devices, reader, return_value=(80, False)) as read:
+                 patch.object(local.hid, "enumerate", side_effect=enumeration([endpoint(vid=vid, page=0xFFFF if protocol == "wlmouse" else 0xFF01, usage=0)])), \
+                 patch.object(module, reader, return_value=(80, False)) as read:
                 self.assertEqual(local.detect_mouse()[0]["protocol"], protocol)
                 read.assert_called_once()
 
     def test_rakk_resolves_both_interfaces_and_uses_active_reader(self):
-        sender = endpoint(vid=local.devices.RAKK_VID, pid=local.devices.RAKK_PID, page=0xFF02, usage=2)
+        sender = endpoint(vid=local.RAKK_VID, pid=local.RAKK_PID, page=0xFF02, usage=2)
         listener = {**sender, "usage_page": 0xFF01, "usage": 0, "path": b"listener"}
-        with patch.object(local.hid, "enumerate", return_value=[sender, listener]), \
-             patch.object(local.devices, "read_rakk_battery", return_value=(42, False)) as read:
+        with patch.object(local.hid, "enumerate", side_effect=enumeration([sender, listener])), \
+             patch.object(rakk, "read_rakk_battery", return_value=(42, False)) as read:
             self.assertEqual(local.detect_mouse()[0]["protocol"], "rakk")
-            read.assert_called_once_with(b"vendor", b"listener")
+            self.assertEqual(read.call_args.args[:2], (b"vendor", b"listener"))
 
 
 class TrayTests(unittest.TestCase):
@@ -180,9 +190,9 @@ class TrayTests(unittest.TestCase):
     def test_saved_device_routes_to_selected_endpoint(self):
         self.app.local_device = PROFILE
         with patch.object(self.tray, "resolve_profile", return_value=(b"saved", None)), \
-             patch.object(self.app, "_handle_standard_device") as handle:
+             patch.object(self.tray, "profile_handler") as factory:
             self.assertTrue(self.app._poll_local_device())
-            handle.assert_called_once_with(b"saved", "wireless", "Test Mouse", PROFILE)
+            factory.return_value.handle_device.assert_called_once_with(self.app, b"saved", "wireless", "Test Mouse")
 
     def test_unplugged_device_allows_builtin_fallback(self):
         self.app.local_device = PROFILE
@@ -193,7 +203,7 @@ class TrayTests(unittest.TestCase):
         self.app._rescan_requested.set()
         device = Mock()
         with patch.object(self.tray.hid, "device", return_value=device):
-            self.app._handle_standard_device(b"current", "wireless", "Test")
+            local.profile_handler(PROFILE).handle_device(self.app, b"current", "wireless", "Test")
         device.read.assert_not_called()
         self.assertTrue(device.close.called)
 
