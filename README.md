@@ -150,9 +150,12 @@ python -B tools/test_simulation.py
 
 RAKK Gahum support is implemented in `protocols/rakk.py`. Because its receiver
 shares VID/PID `25a7:fa7c` with Pulsar devices, automatic polling selects RAKK
-only after matching its two vendor interfaces and receiving a valid RAKK reply.
-Pulsar devices keep their CompX handling. Invalid 0% RAKK startup replies are
-ignored until a valid reading arrives.
+by its FF02/2 send and FF01/0 receive interface pair, rather than by IDs alone.
+A single pair can be matched even when Windows exposes different instance
+paths without a serial number. Ambiguous pairs from multiple receivers are
+not guessed. Devices without this interface pair keep their CompX handling.
+Missing or invalid 0% RAKK startup replies are retried in the RAKK handler;
+one-click setup still requires a valid battery reading before saving a profile.
 
 ---
 

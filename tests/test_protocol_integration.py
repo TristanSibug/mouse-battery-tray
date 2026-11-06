@@ -22,6 +22,50 @@ def rakk_endpoints():
 
 
 class RakkTests(unittest.TestCase):
+    def test_single_receiver_without_serial_pairs_distinct_windows_interface_paths(self):
+        endpoints = rakk_endpoints()
+        endpoints[0].update(serial_number='', path=br'\\?\hid#vid_25a7&pid_fa7c&mi_01#8&111111&0&0000#{hid}')
+        endpoints[1].update(serial_number='', path=br'\\?\hid#vid_25a7&pid_fa7c&mi_02#8&222222&0&0000#{hid}')
+        self.assertEqual(rakk.find_rakk_pairs(endpoints), [(endpoints[0]['path'], endpoints[1]['path'])])
+
+    def test_startup_without_battery_does_not_fall_through_to_pulsar(self):
+        with patch.object(rakk.hid, 'enumerate', side_effect=enumeration(rakk_endpoints())), \
+             patch.object(rakk, 'read_rakk_battery', return_value=(None, None)):
+            selected = next((h, d) for h in get_all_handlers() if (d := h.find_device())[0])
+        self.assertIsInstance(selected[0], rakk.RakkProtocol)
+
+    def test_missing_startup_reading_is_retried_until_valid(self):
+        probe = local._BatteryProbe(time.monotonic() + 1, lambda: False)
+        with patch.object(rakk.hid, 'enumerate', side_effect=enumeration(rakk_endpoints())), \
+             patch.object(rakk, 'read_rakk_battery', side_effect=[(None, None), (65, False)]) as read, \
+             patch.object(probe, 'wait_for_poll') as wait:
+            rakk.RakkProtocol().handle_device(probe, b'send', 'wireless', 'RAKK Gahum')
+        self.assertEqual(probe.reading, (65, False))
+        self.assertEqual(read.call_count, 2)
+        self.assertEqual(wait.call_args_list[0].args, (10,))
+
+    def test_multiple_unidentified_receivers_are_not_cross_paired(self):
+        endpoints = []
+        for number in (1, 2):
+            pair = rakk_endpoints()
+            for role, device in enumerate(pair):
+                device.update(serial_number='', path=f'interface-{number}-{role}'.encode())
+            endpoints.extend(pair)
+        self.assertEqual(rakk.find_rakk_pairs(endpoints), [])
+
+    def test_one_click_and_saved_profile_work_without_shared_serial(self):
+        endpoints = rakk_endpoints()
+        for index, device in enumerate(endpoints):
+            device.update(serial_number='', path=f'windows-interface-{index}'.encode())
+        sender, listener = Mock(), Mock()
+        listener.read.side_effect = [[], [9, 4, 0, 0, 0, 0, 72, 1]]
+        with patch.object(rakk.hid, 'enumerate', side_effect=enumeration(endpoints)), \
+             patch.object(rakk.hid, 'device', side_effect=[sender, listener]), \
+             patch.object(rakk.time, 'sleep'):
+            profile, battery, charging = local.detect_mouse()
+            self.assertEqual((profile['protocol'], battery, charging), ('rakk', 72, True))
+            self.assertEqual(local.resolve_profile(profile), (endpoints[0]['path'], endpoints[1]['path']))
+
     def test_query_checksum_ignores_zero_startup_reply_and_accepts_charge(self):
         sender, listener = Mock(), Mock()
         listener.read.side_effect = [[], [9, 4, 0, 0, 0, 0, 0, 0], [9, 4, 0, 0, 0, 0, 72, 1]]
@@ -33,6 +77,8 @@ class RakkTests(unittest.TestCase):
         self.assertEqual(sum(request) & 0xFF, 0x55)
         sender.close.assert_called_once()
         listener.close.assert_called_once()
+        sender.set_nonblocking.assert_not_called()
+        listener.set_nonblocking.assert_called_once_with(True)
 
     def test_only_zero_or_unrelated_reports_never_become_battery(self):
         for packet in ([9, 4, 0, 0, 0, 0, 0, 0], [9, 5, 0, 0, 0, 0, 80, 0]):
@@ -65,13 +111,13 @@ class RakkTests(unittest.TestCase):
         self.assertEqual(selected[1][2], 'Pulsar X2 / Xlite Series')
         read.assert_not_called()
 
-    def test_matching_layout_requires_valid_reply_before_claiming_rakk(self):
+    def test_matching_layout_stays_on_rakk_while_battery_is_unavailable(self):
         with patch.object(rakk.hid, 'enumerate', side_effect=enumeration(rakk_endpoints())), \
              patch.object(rakk, 'read_rakk_battery', return_value=(None, None)):
             selected = next((h, d) for h in get_all_handlers() if (d := h.find_device())[0])
-        self.assertIsInstance(selected[0], CompxProtocol)
+        self.assertIsInstance(selected[0], rakk.RakkProtocol)
 
-    def test_verified_reply_selects_rakk_and_reuses_first_reading(self):
+    def test_discovery_does_not_consume_first_reading(self):
         with patch.object(rakk.hid, 'enumerate', side_effect=enumeration(rakk_endpoints())), \
              patch.object(rakk, 'read_rakk_battery', return_value=(65, False)) as read:
             handler = rakk.RakkProtocol()
