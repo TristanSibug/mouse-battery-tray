@@ -30,7 +30,13 @@ The application officially recognizes the following models, with dynamic fallbac
 | :--- | :--- | :---: | :---: | :--- |
 | **WLMouse** | Beast X / Mini Pro | 🟢 | 🟢 | 8K Receiver (`VID 0x36a7`) |
 | **Razer** | Universal Wireless / DeathAdder V3 | 🟢 | 🟢 | OpenRazer 90-Byte Query (`VID 0x1532`) |
-| | HyperPolling Dongle | 🟢 | 🟢 | Dongle (`PID 0x00b3`) |
+
+<details>
+<summary>Show all supported devices</summary>
+
+| Brand | Model | 2.4G Wireless | Wired / Charging | Notes |
+| :--- | :--- | :---: | :---: | :--- |
+| **Razer** | HyperPolling Dongle | 🟢 | 🟢 | Dongle (`PID 0x00b3`) |
 | **Attack Shark** | X11 / X6 / R1 / X3 / 8K Receiver | 🟢 | 🟢 | Dynamic Beken model resolution (`VID 0x1d57`) |
 | **Pulsar** | Xlite / X2 Series | 🟢 | 🟢 | CompX OEM (`VID 0x25a7`) |
 | | 8K Dongle Gen.2 | 🟢 | 🟡 | 8K Receiver (`VID 0x3710`) |
@@ -45,6 +51,8 @@ The application officially recognizes the following models, with dynamic fallbac
 | **Cherry Xtrfy** | M68 Wireless | 🟢 | 🟢 | 1K Dongle & Cable (`VID 0x046a`) |
 | **Incott** | G24 Pro | 🟢 | 🟢 | PixArt 8K Dongle (`VID 0x093a`) |
 | **Generic** | Other Beken / CompX / WLMouse / Razer | 🟡 | 🟡 | Dynamic OEM fallback |
+
+</details>
 
 > **Status Key:** 🟢 Supported & Verified &nbsp;|&nbsp; 🟡 Auto-Detected / Untested
 
@@ -161,14 +169,31 @@ old tracked `build/` outputs. Existing executables are not updated by source edi
 
 ## How to Run
 
-1. **Run in Background (Recommended):**
-   Run the file using `pythonw` (or double-click the `.pyw` extension) to start it silently in the background:
-   ```bash
+1. **Run the executable (recommended):**
+   Download `battery_tray.exe` from the [releases page](https://github.com/TristanSibug/mouse-battery-tray/releases),
+   or use the copy you built in `dist`. Exit any older running instance, then
+   double-click the executable. The app runs in the system tray without a console
+   window; check the taskbar's hidden icons if you do not see it. No Python
+   installation is required for the executable.
+
+   You can also launch it from PowerShell in the folder containing the file:
+
+   ```powershell
+   .\battery_tray.exe
+   ```
+
+2. **Run from source in the background:**
+   After installing Python and the source dependencies, use `pythonw` (or
+   double-click `battery_tray.pyw` if `.pyw` files are associated with Python):
+
+   ```powershell
    pythonw battery_tray.pyw
    ```
-2. **Run in Terminal (Debugging):**
-   If you want to view console logs:
-   ```bash
+
+3. **Run from source for debugging:**
+   To view console logs, run:
+
+   ```powershell
    python battery_tray.pyw
    ```
 
