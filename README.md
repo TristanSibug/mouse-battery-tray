@@ -192,6 +192,21 @@ Missing or invalid 0% RAKK startup replies are retried in the RAKK handler.
 
 ## Troubleshooting
 
+### What Check for Updates does
+
+The app checks this fork's latest published GitHub Release in the background at
+startup and about once a day. **Check for Updates** runs that check manually.
+It compares release versions and notifies you when a newer release is available;
+**Update Available** opens the release page in your browser. Nothing is installed
+automatically: download the new executable, exit the old app, and replace it.
+Git tags alone are not published releases, so a repository with only tags may
+report that no published release was found.
+
+**Checking for updates...** means the request is still running. Other enabled
+menu items should remain usable. An open menu keeps its current labels; reopen
+it to see the completed result. Battery and update notifications continue in
+the background.
+
 - **Icon Stays on `??`:** 
   Ensure the mouse is turned on, in wireless mode (using the 2.4G adapter), and not asleep. Wake the mouse by moving it around for the first battery status packet to transmit.
 - **Permissions Issue:**

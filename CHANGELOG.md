@@ -13,6 +13,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ### Fixed
 
+- Windows tray menus are rebuilt before opening, rather than destroyed while open by a background battery or update-check refresh. This prevents hover/selection failures on the first right-click.
+- Repeated update requests share the in-progress check. A missing published GitHub Release is reported separately from being up to date.
 - Hours estimates retain a 48-hour history window and its preceding anchor instead of losing slow discharge observations after four hours. Estimates above 300 hours are no longer silently hidden.
 - Polling gaps reset the estimate even when the percentage is unchanged, charging clears history, and a different HID interface for the same mouse no longer resets learning.
 

@@ -8,6 +8,7 @@ import ctypes
 from typing import Optional, Tuple, List
 
 import pystray
+from tray_icon import create_tray_icon
 from device_names import device_info, specific_usb_name, identity, ask_device_name
 
 from config import (
@@ -78,6 +79,8 @@ class BatteryTrayApp:
 
     def check_for_updates(self, manual: bool = False):
         """Asynchronously fetch the latest release tag from GitHub."""
+        if self.update_status == "checking":
+            return
         self.update_status = "checking"
         if self.icon:
             self.icon.menu = self.create_menu()
@@ -102,9 +105,9 @@ class BatteryTrayApp:
                     else:
                         self.update_status = "error"
             except urllib.error.HTTPError as e:
-                # 404 means no release exists yet on GitHub
+                # Tags alone are not published GitHub Releases.
                 if e.code == 404:
-                    self.update_status = "up_to_date"
+                    self.update_status = "no_release"
                 else:
                     self.update_status = "error"
             except Exception:
@@ -113,7 +116,15 @@ class BatteryTrayApp:
             if self.icon:
                 self.icon.menu = self.create_menu()
                 if manual:
-                    if self.update_status == "up_to_date":
+                    if self.update_status == "no_release":
+                        try:
+                            self.icon.notify(
+                                "No published release was found on GitHub. No update was installed.",
+                                "Mouse Battery Tray",
+                            )
+                        except Exception:
+                            pass
+                    elif self.update_status == "up_to_date":
                         try:
                             self.icon.notify(
                                 f"You are on the latest version ({__version__}).",
@@ -520,7 +531,7 @@ class BatteryTrayApp:
 
     def run(self):
         # Create the tray icon with the starting "??" image and menu (unchanged)
-        self.icon = pystray.Icon(
+        self.icon = create_tray_icon(
             "Mouse Battery Tray",
             get_icon_data(self.status, self.last_battery, self._icon_cache),
             "Mouse Battery Tray: Initializing...",
