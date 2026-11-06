@@ -1,8 +1,14 @@
 # Mouse Battery Tray Indicator
 
-[![Platform](https://img.shields.io/badge/Platform-Windows_10_%7C_11-0078D4?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/incconutwo/mouse-battery-tray)
-[![Release](https://img.shields.io/github/v/release/incconutwo/mouse-battery-tray?style=for-the-badge&color=28a745)](https://github.com/incconutwo/mouse-battery-tray/releases)
-[![Downloads](https://img.shields.io/github/downloads/incconutwo/mouse-battery-tray/total?style=for-the-badge&color=7952b3)](https://github.com/incconutwo/mouse-battery-tray/releases)
+**v1.5.0** adds one-click mouse setup and RAKK Gahum support alongside the
+upstream development branch's modular protocol engines and expanded device support.
+This is TristanSibug's fork of
+[incconutwo/mouse-battery-tray](https://github.com/incconutwo/mouse-battery-tray).
+See [CHANGELOG.md](CHANGELOG.md) for the release notes.
+
+[![Platform](https://img.shields.io/badge/Platform-Windows_10_%7C_11-0078D4?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/TristanSibug/mouse-battery-tray)
+[![Release](https://img.shields.io/github/v/release/TristanSibug/mouse-battery-tray?style=for-the-badge&color=28a745)](https://github.com/TristanSibug/mouse-battery-tray/releases)
+[![Downloads](https://img.shields.io/github/downloads/TristanSibug/mouse-battery-tray/total?style=for-the-badge&color=7952b3)](https://github.com/TristanSibug/mouse-battery-tray/releases)
 [![License](https://img.shields.io/badge/License-MIT-blue?style=for-the-badge)](LICENSE)
 [![Ko-fi](https://img.shields.io/badge/Support_on-Ko--fi-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/incconutwo)
 
@@ -10,7 +16,7 @@
 
 A lightweight, standalone Windows system tray application that displays the live battery percentage of wireless gaming mice (Attack Shark, Pulsar, Razer, WLMouse Beast X family, Beken/CompX OEM, etc.) directly in the taskbar.
 
-[<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle; margin-right: 4px;"><path d="M12 15V3"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/></svg> **Download Latest Release (MouseBatteryTray.exe)**](https://github.com/incconutwo/mouse-battery-tray/releases/latest)
+[<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle; margin-right: 4px;"><path d="M12 15V3"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/></svg> **View releases and downloads**](https://github.com/TristanSibug/mouse-battery-tray/releases/latest)
 
 This tool serves as a lightweight alternative to resource-heavy official manufacturer hub software.
 
@@ -29,6 +35,7 @@ The application officially recognizes the following models, with dynamic fallbac
 | **Pulsar** | Xlite / X2 Series | 🟢 | 🟢 | CompX OEM (`VID 0x25a7`) |
 | | 8K Dongle Gen.2 | 🟢 | 🟡 | 8K Receiver (`VID 0x3710`) |
 | | X2 & X2N CrazyLight | 🟢 | 🟢 | 8K Receiver & Wired (`VID 0x3710`) |
+| **RAKK** | Gahum | 🟢 | 🟡 | Dedicated report-08 query (`VID 0x25a7`, `PID 0xfa7c`); wireless verified by fork maintainer |
 | **VXE** | R1 Series (R1 / SE / SE+ / Pro / Pro Max) | 🟢 | 🟡 | Dongles (`VID 0x3554`, `0x320f`) |
 | **Scyrox** | V6 8K | 🟢 | 🟡 | 8K Dongle (`VID 0x3554`) |
 | **Lamzu** | Maya X 8K | 🟢 | 🟡 | 8K Dongle (`VID 0x373e`) |
@@ -40,6 +47,10 @@ The application officially recognizes the following models, with dynamic fallbac
 | **Generic** | Other Beken / CompX / WLMouse / Razer | 🟡 | 🟡 | Dynamic OEM fallback |
 
 > **Status Key:** 🟢 Supported & Verified &nbsp;|&nbsp; 🟡 Auto-Detected / Untested
+
+The compatibility matrix retains upstream support reports. The maintainer has
+also tested this fork on a RAKK Gahum; simulation tests do not replace hardware
+verification for other mice.
 
 ---
 
@@ -78,7 +89,7 @@ If your mouse is not fully recognized or is displayed as a generic device, we wo
 
 We've made this process incredibly easy by including a standalone **Hardware ID Extractor wizard** (`dump_devices.exe`):
 
-1. Go to the [Releases page](https://github.com/incconutwo/mouse-battery-tray/releases) and download **`dump_devices.exe`** (or run `python tools/dump_devices.py`).
+1. Go to the [Releases page](https://github.com/TristanSibug/mouse-battery-tray/releases) and download **`dump_devices.exe`** (or run `python tools/dump_devices.py`).
 2. Run it and follow the simple 2-step prompt to scan your mouse in **Wireless (2.4G)** and **Wired** modes.
 3. The wizard will automatically generate the clean Python dictionary configuration lines for your device.
 4. Copy the generated block and paste it into a GitHub issue or Reddit reply!
@@ -98,6 +109,8 @@ COMPX_DEVICES = {
 
 ## Features
 
+- **Detect my mouse:** One tray-menu action verifies a compatible battery reply, saves a local profile, and immediately starts using the detected mouse. No manual code editing or issue submission is required.
+- **RAKK Gahum polling:** Uses the dedicated battery request, retries missing startup readings, and supports receivers without serial numbers. Invalid initial 0% replies are ignored.
 - **Live Numeric Percentage:** Displays the exact battery level directly on the tray icon as a colored number.
 - **Color-Coded Status:**
   - 🟢 **Green** ($\ge 50\%$) - Healthy charge
@@ -118,7 +131,14 @@ COMPX_DEVICES = {
 ## Installation
 
 ### Prerequisites
-Make sure you have [Python 3.10+](https://www.python.org/) installed and added to your system PATH.
+For a published executable, download `battery_tray.exe` from this fork's
+[releases](https://github.com/TristanSibug/mouse-battery-tray/releases) and double-click
+it. End users do not need Python. A Git tag or source ZIP alone does not contain
+a newly built executable.
+
+For running from source or building, install [Python](https://www.python.org/)
+on Windows. Python **3.12 (64-bit)** is recommended for the build instructions
+below; source code requires Python 3.10+.
 
 ### Install Dependencies
 Open your terminal (Command Prompt or PowerShell) and run:
@@ -128,18 +148,37 @@ pip install hidapi pystray pillow
 
 ### Build the Windows executable
 
-Run these commands from the repository directory on **Windows** after changing
-the source. Existing release executables do not acquire new features automatically.
-PyInstaller follows the `local_devices` import and bundles the detector into the
-same single-file executable; the settings file is created on the user's PC.
+1. Install Python 3.12 for Windows, including the Python launcher (`py`).
+2. Download and extract the [v1.5.0 source ZIP](https://github.com/TristanSibug/mouse-battery-tray/archive/refs/tags/v1.5.0.zip).
+3. Exit the running tray app. Open **PowerShell** in the extracted folder that
+   contains `battery_tray.pyw` and `battery_tray.spec`.
+4. Run these commands one line at a time:
 
-```bat
-python -m pip install pyinstaller
-python -m PyInstaller --noconfirm --clean --workpath "%TEMP%\MouseBatteryTray-build" battery_tray.spec
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
+.\.venv\Scripts\python.exe -m pip install hidapi pystray pillow pyinstaller
+.\.venv\Scripts\python.exe -m PyInstaller --noconfirm --clean --workpath "$env:TEMP\MouseBatteryTray-build" battery_tray.spec
 ```
 
-The result is `dist\battery_tray.exe`. Windows tray behavior and live battery
-readings must be checked on Windows with a supported receiver connected.
+5. Find the finished **single file** at `dist\battery_tray.exe`. The existing spec
+   bundles the application, protocol modules, local detector, and dependencies
+   into that executable and hides the console. You do not need to add `--onefile`
+   when building from this spec, activate the virtual environment, or change
+   PowerShell's execution policy.
+6. Double-click the new executable, check the tray menu displays **v1.5.0**, and
+   test **Detect my mouse**, charging, and restarting. Close it before rebuilding
+   if Windows reports the file is in use.
+
+Build on **Windows**: running PyInstaller on Linux will not produce a Windows
+`.exe`. The intermediate build goes into the temporary directory, avoiding the
+old tracked `build/` outputs. Existing executables are not updated by source edits.
+
+To distribute it, create a GitHub Release from the **v1.5.0** tag in this fork,
+upload `dist\battery_tray.exe` as a release asset, and publish the release.
+The app's update checker uses this fork's published releases. The user's
+`%LOCALAPPDATA%\MouseBatteryTray\device.json` is created at runtime and should
+not be bundled or uploaded. Recipients need only the executable.
 
 The discovery and persistence tests can run without Windows or a USB receiver:
 

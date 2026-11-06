@@ -4,6 +4,27 @@ All notable changes to the Mouse Battery Tray project are documented in this fil
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.5.0] - 2026-11-06
+
+### Added
+
+- **One-click setup:** Right-click the tray and choose **Detect my mouse** to verify and save a compatible mouse locally, including with the single-file executable. No manual source editing or issue submission is required.
+- **RAKK Gahum support:** Dedicated report-08 battery query, charging status, and rejection of invalid 0% startup replies.
+- **Upstream development updates:** Integrated the `v1.2.2-dev` protocol modules, expanded device mappings, multi-interface discovery, corrected Razer queries, and packet-validation fixes.
+
+### Fixed
+
+- RAKK interfaces without serial numbers can be paired despite different Windows interface paths when exactly one pair is available. Missing startup readings are retried by RAKK polling instead of falling through to Pulsar.
+- Saved profiles from the earlier one-click version continue to work with the new protocol handlers.
+- Detecting another mouse interrupts polling and releases HID handles before scanning.
+- CompX report-06 queries work on silent receivers; G-Wolves filtering and repeated-reading checks prevent misleading battery readings without discarding other receivers' single heartbeat reports.
+- Update checks now use this fork's releases.
+
+### Validation
+
+- 40 unit and integration tests, 20 device simulations, 7 packet edge cases, and 2 device-deduplication checks pass.
+- RAKK operation was confirmed on Windows by the fork maintainer. Other device families are covered by simulations and retain upstream compatibility claims; this release does not imply new physical hardware verification of every model.
+
 ## [v1.2.2] - 2026-07-26
 
 ### 🚀 New Device Support & Protocol Engines

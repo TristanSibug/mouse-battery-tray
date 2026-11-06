@@ -1,9 +1,9 @@
 from typing import List
 
-__version__ = "v1.2.2-beta.2"
-GITHUB_REPO_URL = "https://github.com/incconutwo/mouse-battery-tray"
-GITHUB_RELEASES_API = "https://api.github.com/repos/incconutwo/mouse-battery-tray/releases/latest"
-GITHUB_RELEASES_URL = "https://github.com/incconutwo/mouse-battery-tray/releases/latest"
+__version__ = "v1.5.0"
+GITHUB_REPO_URL = "https://github.com/TristanSibug/mouse-battery-tray"
+GITHUB_RELEASES_API = "https://api.github.com/repos/TristanSibug/mouse-battery-tray/releases/latest"
+GITHUB_RELEASES_URL = "https://github.com/TristanSibug/mouse-battery-tray/releases/latest"
 
 
 def is_newer_version(latest: str, current: str) -> bool:
