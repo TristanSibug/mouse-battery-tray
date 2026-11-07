@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+### Experimental branch: assisted USB capture
+
+- Added **Investigate Unsupported Mouse...** with a separate Windows/Tk wizard,
+  selected-address USBPcap capture, timestamped battery/charging observations,
+  bounded recording, and local review exports. Requires separately installed
+  USBPcap and the manufacturer's software; no driver is downloaded or installed.
+- Added USBPcap PCAP validation, descriptor VID/PID comparison, control-transfer
+  pairing and conservative byte-correlation hints. Invalid/empty captures and
+  unconfirmed device selection are distinguished from useful captured evidence.
+- Tray polling pauses while the helper owns the diagnostic workflow and resumes
+  on close. No packets are replayed, no protocol code is generated or modified,
+  and no capture is uploaded automatically.
+- Windows USBPcap/UAC and real-hardware validation remain required before merging
+  the feature into main.
+
 ### Added
 
 - **Fix Generic Device Name:** A display-only action for mice already reporting a battery level. It uses a specific USB product name when available and otherwise asks for a model name. Names are saved locally by VID/PID and survive restarts; no protocol mappings are changed.
