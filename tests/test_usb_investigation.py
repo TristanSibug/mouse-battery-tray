@@ -13,7 +13,6 @@ from unittest.mock import Mock, patch
 import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from helpers import load_tray
 from usb_investigation import capture, pcap
 
 CONTROLLER = r'\\.\USBPcap1'
@@ -88,15 +87,6 @@ class DiscoveryTests(unittest.TestCase):
         self.assertEqual(len(data), 1)
         self.assertNotIn('private', json.dumps(data))
 
-    def test_unfrozen_helper_command_uses_cli_entry_point(self):
-        with patch.object(capture.sys, 'frozen', False, create=True):
-            command = capture.helper_command()
-        self.assertEqual(command[-1], '--usb-investigation')
-        self.assertTrue(command[-2].endswith('battery_tray.pyw'))
-
-    def test_frozen_helper_command_reuses_executable(self):
-        with patch.object(capture.sys, 'frozen', True, create=True):
-            self.assertEqual(capture.helper_command(), [sys.executable, '--usb-investigation'])
 
 
 class PcapTests(unittest.TestCase):
@@ -275,64 +265,6 @@ class SessionTests(unittest.TestCase):
         archive, summary = self.session.finalize()
         self.assertTrue(archive.is_file())
         self.assertEqual(summary['device_identity'], 'matched')
-
-
-class TrayInvestigationTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.tray = load_tray()
-
-    def setUp(self):
-        self.app = self.tray.BatteryTrayApp()
-        self.app.icon = Mock()
-
-    def test_polling_pauses_and_resumes_around_helper_process(self):
-        helper = Mock()
-        helper.wait.return_value = 0
-        def during_helper():
-            self.assertFalse(self.app.polling_active())
-            self.assertTrue(self.app._poll_wakeup.is_set())
-            self.assertIn('paused', self.app.icon.title)
-            return helper
-        with patch.object(self.tray.sys, 'platform', 'win32'), \
-             patch.object(self.tray.threading, 'Thread') as thread, \
-             patch.object(self.tray, 'launch_helper', side_effect=during_helper):
-            self.app.on_investigate_mouse(None, None)
-            thread.call_args.kwargs['target']()
-        self.assertFalse(self.app._capture_pause.is_set())
-        self.assertFalse(self.app._capture_lock.locked())
-        self.assertFalse(self.app._poll_wakeup.is_set())
-        self.assertTrue(self.app.polling_active())
-
-    def test_handle_release_timeout_never_launches_capture(self):
-        self.app._protocol_idle.clear()
-        with patch.object(self.tray.sys, 'platform', 'win32'), \
-             patch.object(self.tray.threading, 'Thread') as thread, \
-             patch.object(self.app._protocol_idle, 'wait', return_value=False), \
-             patch.object(self.tray, 'launch_helper') as launch:
-            self.app.on_investigate_mouse(None, None)
-            thread.call_args.kwargs['target']()
-        launch.assert_not_called()
-        self.assertFalse(self.app._capture_pause.is_set())
-
-    def test_helper_failure_resumes_polling_and_keeps_rakk_support(self):
-        with patch.object(self.tray.sys, 'platform', 'win32'), \
-             patch.object(self.tray.threading, 'Thread') as thread, \
-             patch.object(self.tray, 'launch_helper', side_effect=OSError('missing')):
-            self.app.on_investigate_mouse(None, None)
-            thread.call_args.kwargs['target']()
-        self.assertTrue(self.app.polling_active())
-        self.assertIn('Could not open', self.app.icon.notify.call_args.args[0])
-
-    def test_exit_requires_closing_active_investigation_first(self):
-        self.app._capture_lock.acquire()
-        self.app.on_exit(None, None)
-        self.assertTrue(self.app.running)
-        self.app.icon.stop.assert_not_called()
-        self.app._capture_lock.release()
-        self.app.on_exit(None, None)
-        self.assertFalse(self.app.running)
-        self.assertTrue(self.app._poll_wakeup.is_set())
 
 
 if __name__ == '__main__':

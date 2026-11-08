@@ -1,11 +1,4 @@
 import sys
-
-# The diagnostic helper owns its own Tk UI and does not start another tray or
-# acquire the app mutex. This branch also works inside the frozen executable.
-if __name__ == '__main__' and sys.argv[1:] == ['--usb-investigation']:
-    from usb_investigation.wizard import main as investigation_main
-    raise SystemExit(investigation_main())
-
 import time
 import threading
 import urllib.request
@@ -17,7 +10,6 @@ from typing import Optional, Tuple, List
 import pystray
 from tray_icon import create_tray_icon
 from device_names import device_info, specific_usb_name, identity, ask_device_name
-from usb_investigation.capture import launch_helper
 
 from config import (
     trim_memory,
@@ -57,11 +49,6 @@ class BatteryTrayApp:
         self.charging = False
         self.current_model = "Mouse"
         self._stop_requested = threading.Event()
-        self._poll_wakeup = threading.Event()
-        self._capture_pause = threading.Event()
-        self._protocol_idle = threading.Event()
-        self._protocol_idle.set()
-        self._capture_lock = threading.Lock()
         self._name_fix_lock = threading.Lock()
         self._active_device_info = None
         self._last_battery_read_at = 0
@@ -349,42 +336,6 @@ class BatteryTrayApp:
         elif charging:
             self.has_alerted = False
 
-    def on_investigate_mouse(self, icon, item):
-        if sys.platform != 'win32':
-            self._investigation_notice('Live USB capture requires Windows and USBPcap.')
-            return
-        if not self._capture_lock.acquire(blocking=False):
-            return
-        self._capture_pause.set()
-        self._poll_wakeup.set()
-        self.update_tray()
-        def worker():
-            try:
-                if not self._protocol_idle.wait(timeout=15):
-                    raise RuntimeError('The current HID operation did not release its handle. Close the app and run battery_tray.exe --usb-investigation directly.')
-                if not self.running:
-                    return
-                helper = launch_helper()
-                code = helper.wait()
-                if code and self.running:
-                    self._investigation_notice('The investigation window exited unexpectedly. Battery polling has resumed.')
-            except Exception as exc:
-                self._investigation_notice(f'Could not open USB investigation: {exc}')
-            finally:
-                self._capture_pause.clear()
-                if self.running:
-                    self._poll_wakeup.clear()
-                self._capture_lock.release()
-                self.update_tray()
-        threading.Thread(target=worker, daemon=True).start()
-
-    def _investigation_notice(self, message):
-        if self.icon and self.running:
-            try:
-                self.icon.notify(message, 'Assisted USB Investigation')
-            except Exception:
-                pass
-
     def create_menu(self) -> pystray.Menu:
         items = []
         if self.update_status == "available" and self.latest_version:
@@ -437,11 +388,6 @@ class BatteryTrayApp:
         if not self.can_fix_device_name():
             items.append(pystray.MenuItem("Name fix requires a detected battery level", None, enabled=False))
         items.append(pystray.MenuItem("Low Battery Alert", threshold_menu))
-        items.append(pystray.MenuItem(
-            'USB investigation in progress...' if self._capture_lock.locked() else 'Investigate Unsupported Mouse...',
-            self.on_investigate_mouse,
-            enabled=lambda item: sys.platform == 'win32' and not self._capture_lock.locked(),
-        ))
 
         if self.update_status == "checking":
             items.append(
@@ -456,14 +402,14 @@ class BatteryTrayApp:
         items.append(
             pystray.MenuItem(f"Mouse Battery Tray {__version__}", self.open_repo_url)
         )
-        items.append(pystray.MenuItem("Exit", self.on_exit, enabled=lambda item: not self._capture_lock.locked()))
+        items.append(pystray.MenuItem("Exit", self.on_exit))
         return pystray.Menu(*items)
 
     def update_tray(self):
         if not self.icon:
             return
 
-        menu_state = (self.can_fix_device_name(), self.estimate_status(), self._capture_lock.locked())
+        menu_state = (self.can_fix_device_name(), self.estimate_status())
         if menu_state != getattr(self, '_last_menu_state', None):
             self._last_menu_state = menu_state
             self.icon.menu = self.create_menu()
@@ -471,9 +417,7 @@ class BatteryTrayApp:
         self.icon.icon = get_icon_data(self.status, self.last_battery, self._icon_cache)
 
         model = self._display_alias or self.current_model or "Mouse"
-        if self._capture_pause.is_set():
-            self.icon.title = f'{model[:64]}: Battery polling paused for USB investigation'
-        elif self.status == "disconnected":
+        if self.status == "disconnected":
             self.icon.title = f"{model}: Disconnected"
         elif self.status == "connected" and self.last_battery < 0:
             self.icon.title = f"{model}: Waiting for battery reading..."
@@ -519,7 +463,7 @@ class BatteryTrayApp:
             self.update_battery_level(battery, charging)
 
     def polling_active(self):
-        if not self.running or self._stop_requested.is_set() or self._capture_pause.is_set():
+        if not self.running or self._stop_requested.is_set():
             return False
         now = time.time()
         if now - getattr(self, "_last_trim", now) > 60:
@@ -533,28 +477,18 @@ class BatteryTrayApp:
         return True
 
     def wait_for_poll(self, seconds):
-        self._poll_wakeup.wait(seconds)
+        self._stop_requested.wait(seconds)
 
     def poll_loop(self):
         self._last_trim = time.time()
         while self.running:
-            if self._capture_pause.is_set():
-                self._protocol_idle.set()
-                self._stop_requested.wait(0.1)
-                continue
             if not self.polling_active():
                 continue
             handled = False
             for handler in get_all_handlers():
                 path, mode, model_name = handler.find_device()
                 if path:
-                    self._protocol_idle.clear()
-                    try:
-                        if not self.polling_active():
-                            break
-                        handler.handle_device(self, path, mode, model_name)
-                    finally:
-                        self._protocol_idle.set()
+                    handler.handle_device(self, path, mode, model_name)
                     handled = True
                     break
             if not handled:
@@ -564,12 +498,8 @@ class BatteryTrayApp:
                 self.wait_for_poll(5)
 
     def on_exit(self, icon, item):
-        if self._capture_lock.locked():
-            self._investigation_notice('Close the USB investigation window to stop capture before exiting the tray.')
-            return
         self.running = False
         self._stop_requested.set()
-        self._poll_wakeup.set()
         self.icon.stop()
 
     def toggle_startup(self, icon, item):

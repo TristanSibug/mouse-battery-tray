@@ -6,20 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
-### Experimental branch: assisted USB capture
+### Experimental branch: standalone USB Investigation
 
-- Added **Investigate Unsupported Mouse...** with a separate Windows/Tk wizard,
-  selected-address USBPcap capture, timestamped battery/charging observations,
-  bounded recording, and local review exports. Requires separately installed
-  USBPcap and the manufacturer's software; no driver is downloaded or installed.
-- Added USBPcap PCAP validation, descriptor VID/PID comparison, control-transfer
-  pairing and conservative byte-correlation hints. Invalid/empty captures and
-  unconfirmed device selection are distinguished from useful captured evidence.
-- Tray polling pauses while the helper owns the diagnostic workflow and resumes
-  on close. No packets are replayed, no protocol code is generated or modified,
-  and no capture is uploaded automatically.
-- Windows USBPcap/UAC and real-hardware validation remain required before merging
-  the feature into main.
+- Added an independent `USBInvestigation.exe` build and `usb_investigator.pyw`
+  entry point. Restored `battery_tray.pyw` exactly to main; the tray contains no
+  diagnostic hooks, automatic pause logic, or USBPcap installer code.
+- Added startup USBPcap installation/readiness checks and an explicit optional
+  installation offer. The official 1.5.4.0 setup is downloaded over verified
+  HTTPS and checked against Microsoft's pinned winget SHA-256 before launch.
+- Runs normal interactive Windows setup through UAC; handles decline/cancel,
+  installer errors, readiness rechecks and restart-required states without
+  triggering a reboot. The offered installer supports x64 Windows only.
+- Retained selected-address capture, labelled observations, bounded recording,
+  local evidence reports and review ZIPs. Users close/restart the battery tray
+  manually. No protocol support is generated and no capture is uploaded.
+- Native Windows installer/UAC/driver and real USB capture validation remain
+  required before merging into main.
 
 ### Added
 

@@ -94,79 +94,103 @@ may need several hours before their first usable battery drop. Charging pauses
 the estimate, and a long gap in polling restarts learning to avoid counting
 sleep time as active discharge. The estimate is approximate and depends on use.
 
-## Assisted USB investigation (experimental)
+## USB Investigation: separate experimental application
 
-**Investigate Unsupported Mouse...** in the tray menu opens a guided local
-capture session. It collects evidence for protocol investigation; it does not
-reverse-engineer a mouse automatically, enable battery support, install a driver,
-or change the protocol modules.
-This workflow targets USB mice and USB wireless receivers. Native Bluetooth
-protocol investigation is not supported by this USB capture workflow.
+`USBInvestigation.exe` is a separate tool for collecting evidence about an
+unsupported USB mouse or wireless receiver. `battery_tray.exe` and its build
+spec are unchanged. There is no investigation menu, launch hook, or installation
+code inside the battery tray.
 
-### One-time setup on Windows
+**This collects evidence; it does not automatically add battery support or
+modify protocol code.** Native Bluetooth investigation is not supported.
 
-1. Install [USBPcap from its official releases](https://github.com/desowin/usbpcap/releases).
-   Follow the installer's restart instructions. The app locates `USBPcapCMD.exe`
-   in common installation locations, or you can browse to it.
-2. Have the manufacturer's mouse software available. You need it to display and
-   refresh the battery level so useful requests and replies occur during capture.
-3. Optionally install [Wireshark](https://www.wireshark.org/download.html) to
-   inspect the resulting PCAP. USBPcap and Wireshark are external tools and are
-   not bundled into `battery_tray.exe`.
+### Build USBInvestigation.exe on Windows
 
-### Collect a session
+1. Download the [standalone investigation branch](https://github.com/TristanSibug/mouse-battery-tray/archive/refs/heads/feature/standalone-usb-investigation.zip)
+   and extract it. Open PowerShell in the folder containing `usb_investigation.spec`.
+2. Install Python for Windows, including Tkinter, then run:
 
-1. Choose **Investigate Unsupported Mouse...**. The tray pauses battery polling
-   and releases its HID handles while the separate investigation window is open.
-2. Click **Refresh device lists**. Select the HID mouse and its matching USB
-   capture address. USB addresses are not hardware IDs: use the interface names
-   or unplug/replug and refresh to identify the correct entry. The app does not
-   guess this match. Replugging may change the address.
-3. Enter the manufacturer's software name, choose an output folder, and confirm
-   the selected-device capture checkbox. USB packets can contain input reports
-   and identifying data; do not choose a keyboard or unrelated device.
-4. Click **Start Capture** and approve USBPcap's administrator prompt if shown.
-   The 10–120 second timer begins when the capture file starts receiving data,
-   with a separate timeout for startup/UAC. A 64 MiB analysis limit also applies.
-5. Enter the battery percentage shown in the manufacturer's software and its
-   charging state. Click **Record Observation**, then refresh that software's
-   reading and let replies arrive. Record further observations when the state
-   changes. Multiple distinct percentages are needed for battery-byte hints;
-   a single short capture will often not be enough.
-6. Keep the same receiver connected. Switching to a wired device or another USB
-   address requires a separate capture. The app never broadens capture to every
-   device on the controller or automatically captures newly connected devices.
-7. Stop the session, or let its timer stop it. Open the review folder, then close
-   the investigation window to resume normal tray polling.
+```powershell
+py -m venv .venv
+.\.venv\Scripts\python.exe -m pip install hidapi pyinstaller
+.\.venv\Scripts\python.exe -m PyInstaller --noconfirm --clean --workpath "$env:TEMP\USBInvestigation-build" usb_investigation.spec
+```
+
+3. The separate single-file output is **`dist\USBInvestigation.exe`**. Building
+   it does not replace `dist\battery_tray.exe`. End users do not need Python.
+   From source, run `py usb_investigator.pyw` instead.
+
+### Detailed user workflow
+
+1. **Open USBInvestigation.exe.** It checks for `USBPcapCMD.exe`, existing USBPcap
+   driver registration, and active USB capture controllers. It distinguishes
+   missing software, an installation that is not ready, and a working capture
+   setup. An installed driver with a missing utility is not treated as absent.
+2. **If USBPcap is missing, an installation offer appears.** Declining leaves
+   the system unchanged. You can instead browse to an existing installation.
+   The built-in installer offer supports x64 Windows; it does not install an
+   x64 driver on ARM or other unsupported platforms.
+3. **If you accept, the app downloads official USBPcap 1.5.4.0.** It preserves
+   HTTPS verification and checks a pinned SHA-256 from Microsoft's
+   [winget manifest](https://github.com/microsoft/winget-pkgs/blob/master/manifests/d/desowin/USBPcap/1.5.4.0/desowin.USBPcap.installer.yaml).
+   An unexpected redirect, failed download, or checksum mismatch stops the
+   process; unverified installers are deleted and never launched.
+4. **The normal Windows USBPcap installer opens through UAC.** Approve the
+   administrator prompt only if you want to proceed. Accept the installer’s
+   license and choose its installation options yourself. This is not a silent
+   installation. Cancelling UAC or setup is supported.
+5. **Readiness is checked again.** A successful installer exit alone is not
+   treated as proof that capture works. If a restart is needed, save your work,
+   restart Windows when convenient, and reopen this app. USB Investigation does
+   not request or trigger a reboot. Use **Check USBPcap** to retry the check.
+6. **Close battery_tray.exe and other battery-polling tools yourself.** The
+   standalone investigation app does not stop or control them. Keep the
+   manufacturer's mouse software open so it can display and refresh the battery.
+7. **Select the HID mouse and its matching USB capture address.** Use names and
+   interface descriptions, or unplug/replug the receiver and refresh to identify
+   the entry that changes. Addresses are not hardware IDs and can change when
+   a device is reconnected. The app does not guess this match.
+8. **Enter the manufacturer's software name and select an output folder.**
+   Confirm that the battery tray is closed and that you consent to capturing
+   the selected device. Packets may include device identifiers and input
+   reports; do not select a keyboard or unrelated device. Nothing is uploaded.
+9. **Start capture.** USBPcap may ask for administrator approval for recording,
+   separately from installation. It captures only the chosen address, not all
+   USB devices. The 10–120 second timer begins when data starts being written,
+   with a separate startup timeout and a 64 MiB analysis limit.
+10. **Record observations.** Enter the percentage shown in the manufacturer's
+    software and select charging/not charging. Click **Record Observation**,
+    then refresh the battery reading in that software and allow replies to
+    arrive. Repeat when the percentage or charging state changes. Multiple
+    distinct percentages are needed for battery-byte hints; one short recording
+    will often be insufficient.
+11. **Keep the same receiver connected.** A new USB address or a switch to wired
+    mode requires a separate capture. Capture is never broadened automatically
+    to every device on the controller or to newly connected devices.
+12. **Stop and review.** Stop manually or let the timer finish. The app validates
+    the captured records, compares descriptor VID/PID information when available,
+    and saves local review files. Close USB Investigation and restart the battery
+    tray manually when finished.
 
 ### Review files
 
-Each session has a new folder containing:
+Every session gets a new local folder. `review-bundle.zip` includes:
 
-- `capture.raw.pcap`: the original USBPcap output, retained locally for diagnosis.
-- `capture.pcap`: a review copy with complete records for the selected address.
-- `session.json`: selected device information and timestamped battery/charging labels.
-- `analysis.json`: packet counts, descriptor VID/PID comparison, payload samples,
-  paired control requests/responses, and possible labelled-byte correlations.
-- `REPORT.md`: findings and limitations, including selection mismatches, missing
-  labels, and incomplete/truncated data.
-- `review-bundle.zip`: the review PCAP, session, analysis, and report. Raw output
-  and USBPcap's log are excluded from this ZIP.
+- `capture.pcap`: complete packets for the selected address, readable in Wireshark.
+- `session.json`: device information and timestamped battery/charging observations.
+- `analysis.json`: packet counts, descriptor identity comparison, bounded payload
+  examples, paired control requests/responses, and possible byte correlations.
+- `REPORT.md`: results and limitations, including missing labels, uncertain
+  selection, or an incomplete final packet.
 
-**Nothing is uploaded. Review the files before sharing them yourself.** The app
-checks captured descriptors against the selected HID VID/PID when available;
-missing or mismatched descriptors are explicitly marked for review. Stopping
-USBPcap may interrupt its last write, so partial records are excluded from the
-review copy. Invalid or empty captures do not produce a success bundle.
-Byte correlations are investigation hints and may be coincidental; they are
-never replayed as commands or saved as working protocol support.
+The original `capture.raw.pcap` and USBPcap log remain local but are excluded
+from the ZIP. No report is described as verified protocol support. Invalid or
+empty captures do not produce a success bundle. Byte correlations can be
+coincidental and are never replayed or installed as a new protocol.
 
-The same wizard can be opened directly with `battery_tray.exe --usb-investigation`
-or `python battery_tray.pyw --usb-investigation`. Exit any running tray instance
-first when using this standalone entry point. On other platforms the UI can be
-inspected, but live USBPcap capture is disabled.
-
----
+**Review before sharing. Nothing is uploaded automatically.** Wireshark is
+optional for viewing the PCAP and is not bundled; download it from its
+[official site](https://www.wireshark.org/download.html) if needed.
 
 ## Features
 
@@ -209,7 +233,7 @@ pip install hidapi pystray pillow
 ### Build the Windows executable
 
 1. Install Python for Windows, including the Python launcher (`py`).
-2. For this experimental feature, download and extract the [assisted USB capture branch](https://github.com/TristanSibug/mouse-battery-tray/archive/refs/heads/feature/assisted-usb-capture.zip).
+2. Download and extract the [current main source ZIP](https://github.com/TristanSibug/mouse-battery-tray/archive/refs/heads/main.zip).
 3. Exit the running tray app. Open **PowerShell** in the extracted folder that contains `battery_tray.pyw` and `battery_tray.spec`.
 4. Run these commands one line at a time:
 

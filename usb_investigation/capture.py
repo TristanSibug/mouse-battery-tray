@@ -10,7 +10,6 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
-import sys
 import time
 import uuid
 import zipfile
@@ -250,15 +249,3 @@ class CaptureSession:
             for name in ('capture.pcap', 'session.json', 'analysis.json', 'REPORT.md'):
                 bundle.write(self.directory / name, name)
         return archive, summary
-
-
-def helper_command():
-    if getattr(sys, 'frozen', False):
-        return [sys.executable, '--usb-investigation']
-    return [sys.executable, str(Path(__file__).resolve().parents[1] / 'battery_tray.pyw'), '--usb-investigation']
-
-
-def launch_helper():
-    if sys.platform != 'win32':
-        raise RuntimeError('USBPcap investigation requires Windows.')
-    return subprocess.Popen(helper_command(), **_options())
