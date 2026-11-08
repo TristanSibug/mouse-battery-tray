@@ -96,29 +96,25 @@ sleep time as active discharge. The estimate is approximate and depends on use.
 
 ## USB Investigation: separate experimental application
 
-`USBInvestigation.exe` is a separate tool for collecting evidence about an
-unsupported USB mouse or wireless receiver. `battery_tray.exe` and its build
-spec are unchanged. There is no investigation menu, launch hook, or installation
-code inside the battery tray.
+`USBInvestigation.exe` captures a selected USB mouse/receiver and checks whether
+its battery traffic matches an implemented protocol family. After live validation,
+it can **automatically save a local profile** for the updated `battery_tray.exe`.
+This can add a compatible device's hardware IDs and HID interface bindings without
+editing Python files or rebuilding the app for that device.
 
-**This collects evidence; it does not automatically add battery support or
-modify protocol code.** Native Bluetooth investigation is not supported.
+The two executables remain independent. Only the investigator needs USBPcap;
+the tray loads profiles at startup and has no installer or capture UI. End users
+do not need Python. Native Bluetooth investigation is not supported.
 
-### Build USBInvestigation.exe on Windows
+**This supports known protocol formats, not arbitrary reverse-engineering.**
+Currently implemented templates cover RAKK report `08` / reply `09 04`, canonical
+Beken/CompX reports, CompX report `06` queries, Razer's CRC-checked 90-byte battery
+reply with a 0–255 scale, and WLMouse feature `83` replies. Firmware with different
+headers, scaling, checksums, or commands needs a new template in the source.
+A known brand alone does not guarantee compatibility.
 
-1. Download the [standalone investigation branch](https://github.com/TristanSibug/mouse-battery-tray/archive/refs/heads/feature/standalone-usb-investigation.zip)
-   and extract it. Open PowerShell in the folder containing `usb_investigation.spec`.
-2. Install Python for Windows, including Tkinter, then run:
-
-```powershell
-py -m venv .venv
-.\.venv\Scripts\python.exe -m pip install hidapi pyinstaller
-.\.venv\Scripts\python.exe -m PyInstaller --noconfirm --clean --workpath "$env:TEMP\USBInvestigation-build" usb_investigation.spec
-```
-
-3. The separate single-file output is **`dist\USBInvestigation.exe`**. Building
-   it does not replace `dist\battery_tray.exe`. End users do not need Python.
-   From source, run `py usb_investigator.pyw` instead.
+Build both executables using the [Windows build instructions](#build-both-windows-executables)
+below. From source, run `.\.venv\Scripts\python.exe usb_investigator.pyw`.
 
 ### Detailed user workflow
 
@@ -161,16 +157,57 @@ py -m venv .venv
 10. **Record observations.** Enter the percentage shown in the manufacturer's
     software and select charging/not charging. Click **Record Observation**,
     then refresh the battery reading in that software and allow replies to
-    arrive. Repeat when the percentage or charging state changes. Multiple
-    distinct percentages are needed for battery-byte hints; one short recording
-    will often be insufficient.
+    arrive. Refresh at least twice so matching replies can be checked. Record
+    another observation whenever the percentage or charging state changes.
+    Multiple distinct percentages improve the separate byte-correlation hints;
+    those hints alone never generate a profile.
 11. **Keep the same receiver connected.** A new USB address or a switch to wired
     mode requires a separate capture. Capture is never broadened automatically
     to every device on the controller or to newly connected devices.
-12. **Stop and review.** Stop manually or let the timer finish. The app validates
-    the captured records, compares descriptor VID/PID information when available,
-    and saves local review files. Close USB Investigation and restart the battery
-    tray manually when finished.
+12. **Stop capture.** Stop manually or let the timer finish. The app saves local
+    review files and checks known packet formats, query signatures, observed
+    battery/charging values and HID interfaces. Captured descriptors must confirm
+    the selected VID/PID. Missing evidence, unsupported formats or ambiguous
+    results produce a report, without saving a profile.
+13. **Confirm live validation.** If a family matches, a dialog shows the device,
+    template and reference percentage/charging state. Check the current reading
+    in the manufacturer's app, then **close that app and any battery tray**.
+    Keep the mouse awake and click **Yes**. Choose **No** to defer; adjust the
+    reference fields and click **Validate and Save Profile** when ready.
+14. **The profile is saved automatically if validation passes.** The app uses
+    only its fixed battery templates, requires three live readings matching the
+    reference within one percentage point and the exact charging state, and
+    requires a unique working HID binding. It never replays arbitrary captured
+    commands. A failed validation leaves any previous profile intact.
+15. **Close Investigator and start/restart the newly built battery_tray.exe.**
+    It loads local profiles before built-in handlers. The tray menu shows
+    **Local mouse profile active** while one is selected. If its readings stop,
+    the tray gives built-in handlers a chance to work. An older release without
+    the profile loader cannot use these files.
+
+### Profile location and reset
+
+Profiles are JSON files on the same Windows user account and PC:
+
+```text
+%LOCALAPPDATA%\MouseBatteryTray\ProtocolProfiles\vvvv-pppp.json
+```
+
+For example, `25a7-fa7c.json` is a VID/PID binding. Each file selects a fixed
+protocol template and HID interfaces; it contains validation results, not
+executable code or captured query bytes. `devices.py` is not rewritten.
+
+To disable/reset a profile, exit the tray and investigator, then delete the file
+or rename its extension to `.json.disabled`. Restart the tray. Revalidating the
+same VID/PID replaces its profile atomically; failed writes preserve the old one.
+Profiles load only at tray startup. Disconnect duplicate identical receivers
+when validating; ambiguous interfaces are rejected. Display-name overrides from
+**Fix Generic Device Name** remain separate registry settings.
+
+Passing three readings verifies the observed state, not every battery level or
+charging mode. Test discharge, charging and reconnection on the actual mouse
+before relying on the estimate. This branch has automated fixture tests;
+Windows driver/UAC and real-device validation are still required.
 
 ### Review files
 
@@ -182,11 +219,14 @@ Every session gets a new local folder. `review-bundle.zip` includes:
   examples, paired control requests/responses, and possible byte correlations.
 - `REPORT.md`: results and limitations, including missing labels, uncertain
   selection, or an incomplete final packet.
+- `profile-result.json`: the recognition/validation outcome once evaluated.
+  It records whether a profile was actually saved; a capture alone is not success.
 
 The original `capture.raw.pcap` and USBPcap log remain local but are excluded
-from the ZIP. No report is described as verified protocol support. Invalid or
-empty captures do not produce a success bundle. Byte correlations can be
-coincidental and are never replayed or installed as a new protocol.
+from the ZIP. Invalid or empty captures do not produce a success bundle.
+Byte correlations can be coincidental and are never replayed or installed as a
+new protocol. A profile requires recognized template evidence plus the separate
+live validation described above.
 
 **Review before sharing. Nothing is uploaded automatically.** Wireshark is
 optional for viewing the PCAP and is not bundled; download it from its
@@ -230,10 +270,11 @@ Open your terminal (Command Prompt or PowerShell) and run:
 pip install hidapi pystray pillow
 ```
 
-### Build the Windows executable
+### Build both Windows executables
 
 1. Install Python for Windows, including the Python launcher (`py`).
-2. Download and extract the [current main source ZIP](https://github.com/TristanSibug/mouse-battery-tray/archive/refs/heads/main.zip).
+2. Download and extract the [verified protocol profiles branch ZIP](https://github.com/TristanSibug/mouse-battery-tray/archive/refs/heads/feature/verified-protocol-profiles.zip).
+   If using Git, check out `feature/verified-protocol-profiles` and pull it first.
 3. Exit the running tray app. Open **PowerShell** in the extracted folder that contains `battery_tray.pyw` and `battery_tray.spec`.
 4. Run these commands one line at a time:
 
@@ -242,16 +283,20 @@ py -m venv .venv
 .\.venv\Scripts\python.exe -m pip install --upgrade pip
 .\.venv\Scripts\python.exe -m pip install hidapi pystray pillow pyinstaller
 .\.venv\Scripts\python.exe -m PyInstaller --noconfirm --clean --workpath "$env:TEMP\MouseBatteryTray-build" battery_tray.spec
+.\.venv\Scripts\python.exe -m PyInstaller --noconfirm --clean --workpath "$env:TEMP\USBInvestigation-build" usb_investigation.spec
 ```
 
-5. Find the finished **single file** at `dist\battery_tray.exe`. The existing spec
-   bundles the application, protocol modules, and dependencies
-   into that executable and hides the console. You do not need to add `--onefile`
-   when building from this spec, activate the virtual environment, or change
-   PowerShell's execution policy.
-6. Double-click the new executable, check the tray menu displays **v1.5.0**, and
-   test automatic battery readings, charging, and restarting. Close it before rebuilding
-   if Windows reports the file is in use.
+5. Find the two **separate single-file executables**:
+   - `dist\battery_tray.exe`: tray app with the local profile loader.
+   - `dist\USBInvestigation.exe`: capture, optional USBPcap installation and profile validation.
+6. Both specs bundle their Python modules and dependencies and hide the console.
+   Do not add `--onefile` when building from a spec. Virtual-environment activation
+   and changes to PowerShell's execution policy are unnecessary. USBPcap's driver
+   is installed separately through Investigator's optional setup flow.
+7. Run the new tray to check ordinary readings first. For investigation, close it,
+   run `USBInvestigation.exe`, complete validation, then close Investigator and
+   restart the new tray. Test readings, charging and receiver reconnection.
+   Close each executable before rebuilding if Windows reports it is in use.
 
 Build on **Windows**: running PyInstaller on Linux will not produce a Windows
 `.exe`. The intermediate build goes into the temporary directory, avoiding the

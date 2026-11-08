@@ -6,22 +6,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
-### Experimental branch: standalone USB Investigation
+### Experimental branch: verified protocol profiles
 
-- Added an independent `USBInvestigation.exe` build and `usb_investigator.pyw`
-  entry point. Restored `battery_tray.pyw` exactly to main; the tray contains no
-  diagnostic hooks, automatic pause logic, or USBPcap installer code.
-- Added startup USBPcap installation/readiness checks and an explicit optional
-  installation offer. The official 1.5.4.0 setup is downloaded over verified
-  HTTPS and checked against Microsoft's pinned winget SHA-256 before launch.
-- Runs normal interactive Windows setup through UAC; handles decline/cancel,
-  installer errors, readiness rechecks and restart-required states without
-  triggering a reboot. The offered installer supports x64 Windows only.
+- Kept independent single-file `USBInvestigation.exe` and `battery_tray.exe`
+  builds on `feature/verified-protocol-profiles`. The tray gains a startup profile
+  loader without capture UI, USBPcap dependency or installer hooks.
+- Added recognition of implemented RAKK, Beken, CompX, Razer and WLMouse packet
+  formats using labelled captured replies, known query signatures and confirmed
+  VID/PID descriptors. Unknown or ambiguous protocols remain unsupported.
+- After confirmation of the current manufacturer reading and closure of its
+  software, validates fixed battery templates against three live readings.
+  A unique passing HID binding is saved automatically under
+  `%LOCALAPPDATA%\MouseBatteryTray\ProtocolProfiles`. No arbitrary command replay,
+  source editing or executable profile code is used.
+- Profiles load before built-in handlers; repeated missing readings allow fallback.
+  The tray menu indicates when a local profile is active. Invalid, disabled or
+  oversized profiles are ignored; failed writes preserve previous profiles.
+- Preserved optional USBPcap x64 installation with verified HTTPS, pinned official
+  1.5.4.0 installer checksum, interactive UAC and readiness/restart checks.
 - Retained selected-address capture, labelled observations, bounded recording,
-  local evidence reports and review ZIPs. Users close/restart the battery tray
-  manually. No protocol support is generated and no capture is uploaded.
-- Native Windows installer/UAC/driver and real USB capture validation remain
-  required before merging into main.
+  local evidence reports and review ZIPs, now including profile results. Nothing
+  is uploaded automatically. Users close and restart the applications manually.
+- Added capture/validation/storage/runtime fixtures and a synthetic Tk workflow
+  test. Native Windows installer/UAC/driver and real USB hardware validation
+  remain required before merging into main.
 
 ### Added
 
@@ -37,7 +45,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ### Removed
 
-- Removed the **Detect my mouse** tray action, local device-profile storage, and unknown-device setup code. The app uses the built-in protocol handlers automatically; hardware-ID scanning cannot discover a new battery protocol.
+- Removed the earlier **Detect my mouse** tray action, speculative device-profile storage, and unknown-device setup code. The app uses the built-in protocol handlers automatically; hardware-ID scanning cannot discover a new battery protocol.
 - Removed **Donate / Support** from the tray menu.
 
 ### Retained

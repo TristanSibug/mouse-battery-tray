@@ -53,6 +53,8 @@ class BatteryTrayApp:
         self._active_device_info = None
         self._last_battery_read_at = 0
         self._display_alias = None
+        self._protocol_handlers = None
+        self._using_local_profile = False
 
         # Alert threshold & state (saved in registry)
         self.alert_threshold: int = get_alert_threshold()
@@ -388,6 +390,8 @@ class BatteryTrayApp:
         if not self.can_fix_device_name():
             items.append(pystray.MenuItem("Name fix requires a detected battery level", None, enabled=False))
         items.append(pystray.MenuItem("Low Battery Alert", threshold_menu))
+        if self._using_local_profile:
+            items.append(pystray.MenuItem('Local mouse profile active', None, enabled=False))
 
         if self.update_status == "checking":
             items.append(
@@ -409,7 +413,7 @@ class BatteryTrayApp:
         if not self.icon:
             return
 
-        menu_state = (self.can_fix_device_name(), self.estimate_status())
+        menu_state = (self.can_fix_device_name(), self.estimate_status(), self._using_local_profile)
         if menu_state != getattr(self, '_last_menu_state', None):
             self._last_menu_state = menu_state
             self.icon.menu = self.create_menu()
@@ -481,17 +485,23 @@ class BatteryTrayApp:
 
     def poll_loop(self):
         self._last_trim = time.time()
+        # Read data-only local bindings once. Restart the tray after the
+        # separate Investigator saves or removes a profile.
+        if self._protocol_handlers is None:
+            self._protocol_handlers = get_all_handlers(include_profiles=True)
         while self.running:
             if not self.polling_active():
                 continue
             handled = False
-            for handler in get_all_handlers():
+            for handler in self._protocol_handlers:
                 path, mode, model_name = handler.find_device()
                 if path:
+                    self._using_local_profile = hasattr(handler, 'profile')
                     handler.handle_device(self, path, mode, model_name)
                     handled = True
                     break
             if not handled:
+                self._using_local_profile = False
                 if self.status != "disconnected":
                     self.status = "disconnected"
                     self.update_tray()

@@ -10,6 +10,8 @@ import webbrowser
 
 from .capture import CaptureSession, find_usbpcap, hid_mice, list_targets
 from .setup import check_installation, install_usbpcap, installer_supported, INSTALLER_VERSION
+from .profiles import match_capture, validate_and_save
+from protocol_profiles.store import profile_directory
 
 USBPCAP_RELEASES = 'https://github.com/desowin/usbpcap/releases'
 
@@ -29,6 +31,8 @@ class InvestigationWizard:
         self.setup_state = 'unchecked'
         self.setup_status = tk.StringVar(value='Checking USBPcap installation...')
         self.session = None
+        self.profile_match = None
+        self.profile_status = tk.StringVar(value="A profile is saved only after a supported family and three live battery readings are verified.")
         self.mice = []
         self.targets = []
         self.battery = tk.StringVar(value='')
@@ -59,7 +63,7 @@ class InvestigationWizard:
         body.columnconfigure(1, weight=1)
         ttk.Label(body, text='Collect evidence for an unsupported mouse', font=('Segoe UI', 15, 'bold')).grid(row=0, column=0, columnspan=3, sticky='w')
         ttk.Label(body, wraplength=830, text=(
-            'This does not add battery support automatically. Keep the manufacturer\'s software open and use it to refresh the battery level. '
+            'This can create a local profile for a recognized protocol family after capture and live validation. Keep the manufacturer\'s software open and use it to refresh the battery level. '
             'Close battery_tray.exe and other polling tools before capture. If USBPcap is missing, this app can offer its official installer; nothing is installed without confirmation. '
             'Administrator approval may be required. Use a USB mouse or USB wireless receiver, not native Bluetooth.')).grid(row=1, column=0, columnspan=3, sticky='ew', pady=(5, 12))
         ttk.Label(body, text='1. USBPcapCMD.exe').grid(row=2, column=0, sticky='w')
@@ -117,9 +121,12 @@ class InvestigationWizard:
         self.stop_button.pack(side='left')
         ttk.Label(body, textvariable=self.observation_text, wraplength=830).grid(row=20, column=0, columnspan=3, sticky='ew', pady=4)
         ttk.Label(body, textvariable=self.status, wraplength=830, foreground='#215080').grid(row=21, column=0, columnspan=3, sticky='ew', pady=8)
+        self.validate_button = ttk.Button(body, text='Validate and Save Profile', command=self.validate_profile, state='disabled')
+        self.validate_button.grid(row=22, column=0, sticky='w', pady=5)
+        ttk.Label(body, textvariable=self.profile_status, wraplength=650).grid(row=22, column=1, columnspan=2, sticky='ew', pady=5)
         self.open_button = ttk.Button(body, text='4. Open Local Review Folder', command=self.open_folder, state='disabled')
-        self.open_button.grid(row=22, column=0, columnspan=2, sticky='w')
-        ttk.Button(body, text='Close USB Investigation', command=self.close).grid(row=22, column=2, sticky='e')
+        self.open_button.grid(row=23, column=0, columnspan=2, sticky='w')
+        ttk.Button(body, text='Close USB Investigation', command=self.close).grid(row=23, column=2, sticky='e')
 
     def check_setup(self, auto_offer=True):
         if self.busy or self.session and not self.session.finished:
@@ -241,6 +248,9 @@ class InvestigationWizard:
             duration = int(self.duration.get())
             session = CaptureSession(self.output.get(), self.mice[mouse], self.targets[target], self.software.get(), duration)
             self.session = session
+            self.profile_match = None
+            self.validate_button.configure(state='disabled')
+            self.profile_status.set('Capture first; profile matching runs when capture finishes.')
             executable = self.tool.get().strip()
             self.start_button.configure(state='disabled')
             self.refresh_button.configure(state='disabled')
@@ -279,13 +289,81 @@ class InvestigationWizard:
     def finished(self, value):
         archive, summary = value
         identity = summary['device_identity']
-        self.status.set(f"Review files saved: {archive}. {summary['packets']} packets, device identity {identity}. No support was added. "
+        self.status.set(f"Review files saved: {archive}. {summary['packets']} packets, device identity {identity}. Checking known protocol templates... "
                         + ('The selected HID and USB descriptors match.' if identity == 'matched' else 'Selection was not confirmed: inspect REPORT.md and consider repeating with the correct USB address.'))
         self.open_button.configure(state='normal')
         self.start_button.configure(state='normal' if self.setup_state == 'ready' else 'disabled')
         self.refresh_button.configure(state='normal')
         self.mouse_choice.configure(state='readonly')
         self.target_choice.configure(state='readonly')
+        self.recognize_profile(summary)
+
+    @staticmethod
+    def public_profile_result(result):
+        # Do not present unverified candidate bindings as installable profiles.
+        return {key: value for key, value in result.items() if key != 'candidates'}
+
+    def recognize_profile(self, summary):
+        session = self.session
+        self.start_button.configure(state='disabled')
+        self.validate_button.configure(state='disabled')
+        self.profile_status.set('Matching the capture against supported packet/query templates...')
+        def work():
+            result = match_capture(session, summary)
+            session.record_profile_result(self.public_profile_result(result))
+            return result
+        self._background(work, self.profile_recognized)
+
+    def profile_recognized(self, result):
+        self.profile_match = result
+        self.profile_status.set(result['reason'])
+        self.start_button.configure(state='normal' if self.setup_state == 'ready' else 'disabled')
+        self.validate_button.configure(state='normal' if result['state'] == 'candidate' else 'disabled')
+        if result['state'] == 'candidate':
+            self.validate_profile()
+
+    def validate_profile(self):
+        if self.busy or not self.profile_match or self.profile_match['state'] != 'candidate':
+            return
+        try:
+            reference = int(self.battery.get())
+            if not 0 <= reference <= 100:
+                raise ValueError()
+        except ValueError:
+            messagebox.showinfo('Current battery reference needed', 'Enter the current manufacturer battery percentage (0-100) and charging state before validation.', parent=self.root)
+            return
+        charging = self.charging.get() == 'Charging'
+        confirmed = messagebox.askyesno(
+            'Validate Known Protocol?',
+            f"Recognized {self.profile_match['template']}. Current reference: {reference}%, "
+            + ('charging' if charging else 'not charging') + '.\n\n'
+            + f"Captured device: {self.session.device['product']} ({self.session.device['vid']:04x}:{self.session.device['pid']:04x}).\n\n"
+            + 'Check this against the manufacturer software NOW, then CLOSE that software and any battery tray before clicking Yes. '
+            'Keep the mouse awake and only the intended receiver connected.\n\n'
+            'The app will test only its implemented battery template. If three live readings match, it saves the local profile automatically. '
+            'Choose No to edit the reference fields and use Validate and Save Profile later.', parent=self.root)
+        if not confirmed:
+            self.profile_status.set('Live validation deferred. No profile was saved. Close manufacturer software, check the reference fields, and click Validate and Save Profile when ready.')
+            return
+        session, matched = self.session, self.profile_match
+        self.validate_button.configure(state='disabled')
+        self.start_button.configure(state='disabled')
+        self.profile_status.set('Testing fixed known-template battery queries and interface bindings. This may take up to about 35 seconds...')
+        def work():
+            result = validate_and_save(matched, reference, charging)
+            try:
+                session.record_profile_result(self.public_profile_result(result))
+            except OSError as exc:
+                result['reason'] += f' The review-bundle update failed: {exc}'
+            return result
+        self._background(work, self.profile_validated)
+
+    def profile_validated(self, result):
+        self.profile_status.set(result['reason'] + (f' Location: {profile_directory()}' if result.get('saved') else ''))
+        if result.get('saved'):
+            self.profile_match = {'state': 'saved'}
+        self.validate_button.configure(state='normal' if not result.get('saved') else 'disabled')
+        self.start_button.configure(state='normal' if self.setup_state == 'ready' else 'disabled')
 
     def _drain(self):
         while True:
@@ -312,6 +390,7 @@ class InvestigationWizard:
                     self.session.stop('start_failed')
                 self.open_button.configure(state='normal' if self.session else 'disabled')
                 self.stop_button.configure(state='normal' if self.session and not self.session.finished else 'disabled')
+                self.validate_button.configure(state='normal' if self.profile_match and self.profile_match.get('state') == 'candidate' else 'disabled')
             else:
                 success(value)
         if self.session and not self.busy and not self.session.finalized:
@@ -337,7 +416,7 @@ class InvestigationWizard:
 
     def close(self):
         if self.busy:
-            messagebox.showinfo('Please wait', 'Wait for discovery/download/review preparation, or finish or cancel the USBPcap installer first. Then close this window.', parent=self.root)
+            messagebox.showinfo('Please wait', 'Wait for discovery/download/review/profile validation, or finish or cancel the USBPcap installer first. Then close this window.', parent=self.root)
             return
         if self.session and not self.session.finished:
             if not messagebox.askyesno('Stop capture?', 'Stop USB capture and prepare local review files before closing?', parent=self.root):

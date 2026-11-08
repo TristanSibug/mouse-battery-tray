@@ -232,7 +232,7 @@ class CaptureSession:
         self.manifest['analysis_summary'] = {k: summary[k] for k in ('packets', 'device_identity', 'sha256', 'partial_tail')}
         self._save()
         (self.directory / 'analysis.json').write_text(json.dumps(summary, indent=2), encoding='utf-8')
-        report = ["# Assisted USB investigation", '', '**Evidence only: no battery protocol was added or verified.**', '',
+        report = ["# Assisted USB investigation", '', '**Capture evidence alone does not validate a protocol. See profile-result.json for any later template/live-validation result.**', '',
             f"Selected HID device: {self.device['product']} ({self.device['vid']:04x}:{self.device['pid']:04x})",
             f"USB address: {self.target['address']}; descriptor identity: {summary['device_identity']}",
             f"Complete selected-device packets: {summary['packets']}", f"Labelled observations: {len(self.labels)}", '',
@@ -249,3 +249,19 @@ class CaptureSession:
             for name in ('capture.pcap', 'session.json', 'analysis.json', 'REPORT.md'):
                 bundle.write(self.directory / name, name)
         return archive, summary
+
+    def record_profile_result(self, result):
+        """Keep generation outcome with the evidence; never bundle local paths."""
+        if not self.finalized:
+            raise RuntimeError('Prepare capture review files first.')
+        self.manifest['profile_generation'] = result
+        self._save()
+        (self.directory / 'profile-result.json').write_text(json.dumps(result, indent=2), encoding='utf-8')
+        temporary = self.directory / 'review-bundle.zip.tmp'
+        try:
+            with zipfile.ZipFile(temporary, 'w', zipfile.ZIP_DEFLATED) as bundle:
+                for name in ('capture.pcap', 'session.json', 'analysis.json', 'REPORT.md', 'profile-result.json'):
+                    bundle.write(self.directory / name, name)
+            temporary.replace(self.directory / 'review-bundle.zip')
+        finally:
+            temporary.unlink(missing_ok=True)
